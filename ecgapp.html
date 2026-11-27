@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ECG Live</title>
+<style>
+  :root {
+    --bg: #0b0f0e; --panel: #131917; --panel2: #18201d; --line: #1f2a26; --text: #e7efe9; --muted: #8a9a92;
+    --trace: #3ef08a; --std: #c9d4ce; --beat: #ff5a6e; --accent: #3ef08a; --warn: #ffb86b; --hl: rgba(62,240,138,.14);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", system-ui, sans-serif; }
+  body { padding: max(14px, env(safe-area-inset-top)) 16px calc(84px + env(safe-area-inset-bottom)); }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.02em; }
+  h2 { font-size: 17px; margin: 18px 0 10px; letter-spacing: -0.01em; }
+  .pill { font-size: 13px; padding: 5px 10px; border-radius: 999px; background: var(--panel);
+    color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+  .pill.on { color: var(--accent); border-color: #1f5a3a; }
+  .view { display: none; } .view.active { display: block; }
+
+  .hr { display: flex; align-items: baseline; gap: 10px; margin: 2px 2px 12px; }
+  .hr .heart { font-size: 26px; color: var(--beat); transition: transform .12s ease; display: inline-block; }
+  .hr .heart.pulse { transform: scale(1.35); }
+  .hr .bpm { font-size: 60px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1; }
+  .hr .unit { color: var(--muted); font-size: 16px; }
+  .scope { background: #000; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; position: relative; }
+  canvas { display: block; width: 100%; }
+  #scope { height: 220px; } .beatcv { height: 250px; touch-action: manipulation; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0 14px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 18px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  button { width: 100%; font: inherit; font-size: 16px; font-weight: 600; padding: 14px; border-radius: 14px;
+    border: 0; background: var(--accent); color: #04130b; cursor: pointer; }
+  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 8px; margin-top: 8px; } .row > * { flex: 1; }
+  .msg { margin-top: 10px; font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .msg.warn { color: var(--warn); }
+  .progress { height: 6px; background: var(--panel); border-radius: 99px; overflow: hidden; margin-top: 10px; display: none; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
+  .card .title { font-weight: 600; margin-bottom: 4px; }
+  .small { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .empty { text-align: center; padding: 40px 10px; color: var(--muted); line-height: 1.6; }
+
+  .legend { display: flex; gap: 14px; font-size: 13px; color: var(--muted); margin: 8px 2px 0; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .seg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin: 10px 0 0; }
+  .seg button { background: transparent; color: var(--muted); padding: 8px; font-size: 14px; border-radius: 8px; }
+  .seg button.on { background: var(--panel2); color: var(--text); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .chips button { width: auto; padding: 8px 12px; font-size: 14px; border-radius: 99px; background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+  .chips button.on { border-color: var(--accent); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+  th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .tag { font-size: 12px; padding: 2px 7px; border-radius: 99px; white-space: nowrap; }
+  .tag.ok { background: rgba(62,240,138,.12); color: var(--accent); }
+  .tag.out { background: rgba(255,184,107,.14); color: var(--warn); }
+
+  .q-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .q-prompt { font-size: 18px; font-weight: 600; line-height: 1.45; margin-bottom: 12px; }
+  .opts button { display: block; text-align: left; margin-top: 8px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); font-weight: 500; }
+  .opts button.correct { border-color: var(--accent); background: rgba(62,240,138,.10); }
+  .opts button.wrong { border-color: var(--beat); background: rgba(255,90,110,.10); }
+  .feedback { margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--panel2); line-height: 1.55; font-size: 15px; display: none; }
+  .feedback b.ok { color: var(--accent); } .feedback b.no { color: var(--beat); }
+  .score { font-size: 56px; font-weight: 700; text-align: center; margin: 18px 0 4px; }
+  .list .item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
+  .list .item .l { font-size: 15px; } .list .item .s { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .list .item button { width: auto; padding: 8px 12px; font-size: 13px; }
+
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: rgba(11,15,14,.96);
+    border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); backdrop-filter: blur(10px); }
+  nav button { flex: 1; background: transparent; color: var(--muted); border-radius: 0; padding: 10px 0 12px; font-size: 12px; font-weight: 500; }
+  nav button .ic { display: block; font-size: 20px; margin-bottom: 2px; }
+  nav button.on { color: var(--accent); }
+  .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: #22302a; color: var(--text); padding: 10px 16px; border-radius: 99px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="title">실시간 측정</h1>
+    <span id="status" class="pill">연결 안 됨</span>
+  </header>
+
+  <!-- ===== 측정 ===== -->
+  <section id="view-measure" class="view active">
+    <div class="hr">
+      <span id="heart" class="heart">♥</span>
+      <span id="bpm" class="bpm">--</span>
+      <span class="unit">bpm</span>
+    </div>
+    <div class="scope"><canvas id="scope"></canvas></div>
+    <div class="stats">
+      <div class="stat"><div class="k">최근 RR 간격</div><div class="v" id="rr">-- ms</div></div>
+      <div class="stat"><div class="k">연결 시간</div><div class="v" id="elapsed">0:00</div></div>
+      <div class="stat"><div class="k">수신 샘플</div><div class="v" id="samples">0</div></div>
+      <div class="stat"><div class="k">패킷 손실</div><div class="v" id="loss">0</div></div>
+    </div>
+    <div id="idleBtns">
+      <button id="btnConnect">기기 연결</button>
+      <div class="row"><button id="btnDemo" class="secondary">데모 데이터로 체험</button></div>
+    </div>
+    <div id="liveBtns" style="display:none">
+      <button id="btnRecord">30초 측정 시작</button>
+      <div class="progress" id="recProg"><div></div></div>
+      <div class="row"><button id="btnStop" class="secondary">연결 끊기</button></div>
+    </div>
+    <div id="msg" class="msg"></div>
+    <div id="recDone" class="card" style="display:none">
+      <div class="title">측정 완료</div>
+      <div class="small" id="recSummary"></div>
+      <div class="row"><button id="goCompare">표준 파형과 비교하기</button></div>
+    </div>
+  </section>
+
+  <!-- ===== 비교 ===== -->
+  <section id="view-compare" class="view">
+    <div id="cmpEmpty" class="empty">아직 측정 기록이 없어요.<br>측정 탭에서 <b>30초 측정</b>을 먼저 해주세요.</div>
+    <div id="cmpBody" style="display:none">
+      <div class="small" id="cmpMeta"></div>
+      <div class="scope" style="margin-top:8px"><canvas id="cmpCv" class="beatcv"></canvas></div>
+      <div class="legend"><span><i style="background:var(--trace)"></i>내 평균 박동</span><span><i style="background:var(--std)"></i>표준 정상 파형</span></div>
+      <div class="seg" id="lblSeg"><button data-l="mine" class="on">내 파형 라벨</button><button data-l="std">표준 파형 라벨</button></div>
+      <div class="chips" id="waveChips"></div>
+      <div class="card" id="waveInfo"><div class="title" id="waveTitle"></div><div class="small" id="waveText"></div></div>
+      <h2>간격 비교</h2>
+      <table id="cmpTable"></table>
+      <p class="small" style="margin-top:10px">단일 유도(1채널) 측정의 평균 박동에서 자동으로 추정한 근사값이에요. 학습용이며 진단 목적이 아닙니다.</p>
+    </div>
+  </section>
+
+  <!-- ===== 퀴즈 ===== -->
+  <section id="view-quiz" class="view">
+    <div id="quizStart">
+      <div class="card">
+        <div class="title">심전도 퀴즈 10문제</div>
+        <div class="small" id="quizInfo"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button id="btnQuiz">퀴즈 시작</button></div>
+    </div>
+    <div id="quizQ" style="display:none">
+      <div class="q-head"><span id="qNum"></span><span id="qKind"></span></div>
+      <div class="q-prompt" id="qPrompt"></div>
+      <div class="scope" id="qCvWrap" style="display:none"><canvas id="qCv" class="beatcv"></canvas></div>
+      <div class="opts" id="qOpts"></div>
+      <div class="feedback" id="qFb"></div>
+      <div class="row"><button id="btnNext" style="display:none">다음</button></div>
+    </div>
+    <div id="quizEnd" style="display:none">
+      <div class="score" id="qScore"></div>
+      <div class="small" style="text-align:center" id="qScoreSub"></div>
+      <div id="qWrong"></div>
+      <div class="row" style="margin-top:14px"><button id="btnRetry">다시 풀기</button></div>
+    </div>
+  </section>
+
+  <!-- ===== 기록 ===== -->
+  <section id="view-history" class="view">
+    <h2 style="margin-top:4px">측정 기록</h2>
+    <div class="list" id="histSessions"></div>
+    <h2>퀴즈 기록</h2>
+    <div class="list" id="histQuiz"></div>
+    <p class="small" style="margin-top:14px">기록은 지금 이 기기의 브라우저에 저장돼요. (Firebase 연결 전 임시 저장소)</p>
+    <div class="row"><button id="btnClear" class="secondary">기록 모두 지우기</button></div>
+  </section>
+
+  <nav>
+    <button data-v="measure" class="on"><span class="ic">♥</span>측정</button>
+    <button data-v="compare"><span class="ic">≋</span>비교</button>
+    <button data-v="quiz"><span class="ic">?</span>퀴즈</button>
+    <button data-v="history"><span class="ic">☰</span>기록</button>
+  </nav>
+  <div class="toast" id="toast"></div>
+
+<script>
+// ECG 실시간 신호처리 (브라우저/Node 공용)
+// - 필터: 0.5Hz 고역통과 + 40Hz 저역통과 + 60Hz 노치 (모두 2차 biquad, 실시간 처리 가능)
+// - R-peak: 미분 -> 제곱 -> 150ms 이동평균 -> 적응형 임계값 + 불응기
+
+class Biquad {
+  constructor(type, f0, fs, Q = Math.SQRT1_2) {
+    const w = 2 * Math.PI * f0 / fs, c = Math.cos(w), a = Math.sin(w) / (2 * Q);
+    let b0, b1, b2;
+    if (type === "lowpass") { b0 = (1 - c) / 2; b1 = 1 - c; b2 = (1 - c) / 2; }
+    else if (type === "highpass") { b0 = (1 + c) / 2; b1 = -(1 + c); b2 = (1 + c) / 2; }
+    else { b0 = 1; b1 = -2 * c; b2 = 1; }                       // notch
+    const a0 = 1 + a;
+    this.b = [b0 / a0, b1 / a0, b2 / a0];
+    this.a = [-2 * c / a0, (1 - a) / a0];
+    this.x1 = this.x2 = this.y1 = this.y2 = 0;
+  }
+  step(x) {
+    const y = this.b[0] * x + this.b[1] * this.x1 + this.b[2] * this.x2
+            - this.a[0] * this.y1 - this.a[1] * this.y2;
+    this.x2 = this.x1; this.x1 = x; this.y2 = this.y1; this.y1 = y;
+    return y;
+  }
+}
+
+class EcgProcessor {
+  constructor(fs = 250) {
+    this.fs = fs;
+    this.filters = [
+      new Biquad("highpass", 0.5, fs),
+      new Biquad("lowpass", 40, fs),
+      new Biquad("notch", 60, fs, 30),
+    ];
+    this.n = 0;
+    this.prev = 0;
+    this.win = new Float32Array(Math.round(0.15 * fs));   // 150ms 이동평균 창
+    this.winSum = 0; this.winI = 0;
+    this.thr = 0;                                          // 적응형 임계값
+    this.peakE = 0;                                        // 최근 에너지 최대치
+    this.lastBeat = -1e9;
+    this.searching = false; this.candI = 0; this.candV = -1e9;
+    this.rr = [];                                          // 최근 RR 간격(ms)
+    this.warmup = 2 * fs;                                  // 처음 2초는 필터 안정화
+    this.hist = new Float32Array(fs);                      // 최근 1초 필터 출력 (R 위치 되짚기용)
+  }
+
+  // 원시 ADC 값 하나 입력 -> { y: 필터된 값, beat: R-peak 발생 시 {index, hr} }
+  push(raw) {
+    let y = raw;
+    for (const f of this.filters) y = f.step(y);
+
+    const d = y - this.prev; this.prev = y;
+    const e2 = d * d;
+    this.winSum += e2 - this.win[this.winI];
+    this.win[this.winI] = e2; this.winI = (this.winI + 1) % this.win.length;
+    const e = this.winSum / this.win.length;
+
+    const i = this.n++;
+    this.hist[i % this.hist.length] = y;
+    let beat = null;
+    if (i < this.warmup) { this.peakE = Math.max(this.peakE * 0.999, e); this.thr = 0.35 * this.peakE; return { y, beat }; }
+
+    this.peakE = Math.max(this.peakE * (1 - 1 / (3 * this.fs)), e);   // 약 3초에 걸쳐 서서히 감소
+    this.thr = 0.35 * this.peakE;
+
+    const refractory = i - this.lastBeat < 0.3 * this.fs;             // 300ms 불응기 (최대 200bpm)
+    if (!this.searching && e > this.thr && !refractory) {
+      this.searching = true; this.candStart = i; this.candEnd = i + Math.round(0.12 * this.fs);
+    }
+    if (this.searching) {
+      if (i >= this.candEnd) {
+        this.searching = false;
+        // 에너지는 이동평균이라 늦게 올라가므로, 임계값 통과 150ms 전부터 지금까지 중 가장 높은 지점 = R
+        const from = Math.max(this.candStart - Math.round(0.15 * this.fs), this.lastBeat + 1, i - this.hist.length + 1);
+        this.candI = from; this.candV = -Infinity;
+        for (let k = from; k <= i; k++) { const v = this.hist[k % this.hist.length]; if (v > this.candV) { this.candV = v; this.candI = k; } }
+        const rrMs = (this.candI - this.lastBeat) * 1000 / this.fs;
+        this.lastBeat = this.candI;
+        let hr = null;
+        this.beatCount = (this.beatCount || 0) + 1;
+        if (this.beatCount > 2 && rrMs > 300 && rrMs < 2000) {   // 처음 두 박동은 안정화용으로 버림
+          this.rr.push(rrMs); if (this.rr.length > 8) this.rr.shift();
+          const avg = this.rr.reduce((a, b) => a + b, 0) / this.rr.length;
+          hr = 60000 / avg;
+        }
+        beat = { index: this.candI, rrMs, hr };
+      }
+    }
+    return { y, beat };
+  }
+}
+
+if (typeof module !== "undefined") module.exports = { Biquad, EcgProcessor };
+
+// 평균 박동 분석 + 교육용 표준(정상) 파형
+// - averageBeat: R-peak 기준으로 박동들을 잘라 평균 (잡음 감소)
+// - analyzeBeat: P, Q, R, S, T 위치와 PR / QRS / QT 간격 추정
+// - makeStandardBeat: 가우시안 합으로 만든 교육용 정상 파형 (심박수 60bpm 기준)
+
+const BEAT_PRE = 0.30;   // R 앞 0.30초
+const BEAT_POST = 0.50;  // R 뒤 0.50초
+
+const NORMAL_RANGES = {
+  hr:  { min: 60,  max: 100, unit: "bpm", label: "심박수" },
+  rr:  { min: 600, max: 1000, unit: "ms", label: "RR 간격" },
+  pr:  { min: 120, max: 200, unit: "ms", label: "PR 간격" },
+  qrs: { min: 60,  max: 100, unit: "ms", label: "QRS 폭" },
+  qtc: { min: 350, max: 450, unit: "ms", label: "QTc" },
+};
+
+function averageBeat(signal, rIdx, fs) {
+  const pre = Math.round(BEAT_PRE * fs), post = Math.round(BEAT_POST * fs), len = pre + post + 1;
+  const rr = [];
+  for (let k = 1; k < rIdx.length; k++) rr.push(rIdx[k] - rIdx[k - 1]);
+  if (rr.length < 3) return null;
+  const sorted = [...rr].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+
+  const acc = new Float64Array(len);
+  let used = 0;
+  for (let k = 1; k < rIdx.length - 1; k++) {
+    const r = rIdx[k];
+    // RR이 중앙값에서 20% 넘게 벗어나는 박동(오검출, 잡음)은 제외
+    if (Math.abs(r - rIdx[k - 1] - med) > 0.2 * med || Math.abs(rIdx[k + 1] - r - med) > 0.2 * med) continue;
+    if (r - pre < 0 || r + post >= signal.length) continue;
+    for (let j = 0; j < len; j++) acc[j] += signal[r - pre + j];
+    used++;
+  }
+  if (used < 3) return null;
+  const beat = new Float32Array(len);
+  for (let j = 0; j < len; j++) beat[j] = acc[j] / used;
+  return { beat, fs, rAt: pre, beatsUsed: used, rrMs: med * 1000 / fs };
+}
+
+function analyzeBeat(beat, fs, rAt, rrMs) {
+  const ms = (n) => Math.round(n * 1000 / fs);
+  const s = (sec) => Math.round(sec * fs);
+  const argBy = (a, b, cmp) => { let best = a; for (let i = a; i <= b; i++) if (cmp(beat[i], beat[best])) best = i; return best; };
+  const clampI = (i) => Math.max(0, Math.min(beat.length - 1, i));
+
+  const R = rAt;
+  const slope = (i) => Math.abs(beat[clampI(i + 1)] - beat[clampI(i - 1)]) / 2;
+  let maxSlope = 0;
+  for (let i = R - s(0.05); i <= R + s(0.05); i++) maxSlope = Math.max(maxSlope, slope(i));
+  const thr = 0.1 * maxSlope;
+  // QRS 시작/끝: R에서 바깥으로 가다가 기울기가 12ms 이상 계속 작게 유지되는 첫 지점
+  // (Q·S 골짜기 바닥은 아주 잠깐만 평평하므로 건너뜀)
+  const flat = (i, dir) => slope(i) < thr && slope(i + dir) < thr && slope(i + 2 * dir) < thr;
+  let qrsOn = R;  while (qrsOn > R - s(0.14) && !flat(qrsOn, -1)) qrsOn--;
+  let qrsOff = R; while (qrsOff < R + s(0.16) && !flat(qrsOff, +1)) qrsOff++;
+  const Q = argBy(qrsOn, R, (x, y) => x < y);
+  const S = argBy(R, qrsOff, (x, y) => x < y);
+
+  // 기준선: PR 분절 (QRS 시작 10~40ms 전 구간의 중앙값)
+  const seg = Array.from(beat.slice(clampI(qrsOn - s(0.04)), clampI(qrsOn - s(0.01)) + 1)).sort((a, b) => a - b);
+  const base = seg[Math.floor(seg.length / 2)];
+  const amp = beat[R] - base;
+
+  // P파: QRS 시작 전 0.30초 안의 최댓값, 시작점은 진폭 20% 지점
+  const P = argBy(clampI(R - s(0.30)), clampI(qrsOn - s(0.03)), (x, y) => x > y);
+  const pAmp = beat[P] - base;
+  let pOn = P; while (pOn > 0 && beat[pOn] - base > 0.2 * pAmp) pOn--;
+
+  // T파: QRS 끝 60ms 뒤부터 R 뒤 0.45초 사이에서 기준선과 가장 먼 점 (뒤집힌 T도 대응)
+  const tFrom = clampI(qrsOff + s(0.06)), tTo = clampI(Math.min(R + s(0.45), R + Math.round(0.75 * rrMs * fs / 1000)));
+  const T = argBy(tFrom, tTo, (x, y) => Math.abs(x - base) > Math.abs(y - base));
+  const tAmp = beat[T] - base;
+  let tEnd = T; while (tEnd < beat.length - 1 && Math.abs(beat[tEnd] - base) > 0.15 * Math.abs(tAmp)) tEnd++;
+
+  const pr = ms(qrsOn - pOn), qrs = ms(qrsOff - qrsOn), qt = ms(tEnd - qrsOn);
+  const qtc = Math.round(qt / Math.sqrt(rrMs / 1000));   // Bazett 보정
+  return {
+    base, amp,
+    points: { P, Q, R, S, T, pOn, qrsOn, qrsOff, tEnd },
+    values: { hr: Math.round(60000 / rrMs), rr: Math.round(rrMs), pr, qrs, qt, qtc },
+    pValid: pAmp > 0.03 * amp,
+    tValid: Math.abs(tAmp) > 0.05 * amp,
+  };
+}
+
+function makeStandardBeat(fs) {
+  // (진폭, 중심[s], 폭[s]) - 심박수 60bpm 정상 동리듬을 흉내 낸 교육용 합성 파형
+  const waves = [
+    [0.13, -0.170, 0.022],   // P
+    [-0.10, -0.028, 0.008],  // Q
+    [1.00, 0.000, 0.010],    // R
+    [-0.22, 0.028, 0.009],   // S
+    [0.30, 0.250, 0.042],    // T
+  ];
+  const pre = Math.round(BEAT_PRE * fs), post = Math.round(BEAT_POST * fs), len = pre + post + 1;
+  const beat = new Float32Array(len);
+  for (let j = 0; j < len; j++) {
+    const t = (j - pre) / fs;
+    let v = 0;
+    for (const [a, mu, sd] of waves) v += a * Math.exp(-((t - mu) ** 2) / (2 * sd * sd));
+    beat[j] = v;
+  }
+  // 합성 파형이므로 각 지점은 정의에서 바로 계산 (가우시안 중심 ± 2.5σ)
+  const at = (sec) => pre + Math.round(sec * fs);
+  const points = {
+    P: at(-0.170), Q: at(-0.028), R: pre, S: at(0.028), T: at(0.250),
+    pOn: at(-0.170 - 2.5 * 0.022), qrsOn: at(-0.028 - 2 * 0.008),
+    qrsOff: at(0.028 + 2 * 0.009), tEnd: at(0.250 + 2.5 * 0.042),
+  };
+  const ms = (n) => Math.round(n * 1000 / fs);
+  const qt = ms(points.tEnd - points.qrsOn);
+  const analysis = {
+    base: 0, amp: 1, points, pValid: true, tValid: true,
+    values: { hr: 60, rr: 1000, pr: ms(points.qrsOn - points.pOn), qrs: ms(points.qrsOff - points.qrsOn), qt, qtc: qt },
+  };
+  return { beat, fs, rAt: pre, rrMs: 1000, analysis };
+}
+
+if (typeof module !== "undefined") module.exports = { averageBeat, analyzeBeat, makeStandardBeat, NORMAL_RANGES, BEAT_PRE, BEAT_POST };
+
+const DEMO_B64 = "6wfnB6kHowfgBwQIugeyB94HCAjJB7UH+gckCAgIygciCEsIKgjrBwEIXAhNCCUIJwiFCIQIVghgCKQIwghoCHgIvAjiCIQIdQinCLcIhwg7CHQIkAhkCBIICwg3CPYHqQeQB9EHqgdiB14HlgeUBzYHNgdwB58HWgc6B3MHkQdrByEHageWB3oHOQdLB6AHhAdZB2IHxAehB2kHZweaB7kHawdwB6kH1wedB38HtwfVB7QHfwfvBzoILAjwBxYIggh3CE8ITQiTCIcISggyCEUIOwjNB7YH1wfyB6cHdwefB8UHugd8B7MH2Ae/B4QHjQfGB7QHlAefBwUI/wfEB8AH+gcOCOIHPwgLCQ8KAQvOC2MMEAyFCtQHfgYwBmIG1AaSBwkI6AegB4cH2AfKB4oHggfAB/oHsQepB98HEQi6B6QH5wcHCNsHkwfWBwkI/wfLB78HGAgECNwH4Ac2CEAIDggLCEAIXAgmCCkIWAh+CEAILghzCJIIZwgtCJkI3QjFCH4ImAjfCNQIpgiSCNkIqgh5CHQIlgioCCYI8gcGCCcI3Qe/B98H3gehB1AHkwfDB6cHYwd4B7MHhwdWB2QH1QfOB4gHggfFB+YHrAe5B+oHDQjdB6sH4wcMCPEHowf1ByYIDwjRB9gHIAgGCNcH0wc0CBgI6wfxBycIPQjhB+IHHAhNCBYIGAh0CJ8IdQg3CJUI1QjTCKkIrwjqCMcIhQhfCI4IMAjiB9EH+AcYCJcHfwetB9kHmwd/B7wH2ge2B4AHxAfkB8AHgAeYB/oH6ge/B7YH/Af8BwcIeAhYCVoKRgsCDEwMsAuNCUkHUAY4BpwGGQfTBxYI7geaB5AH4Ae/B5IHlAfeB9AHqAe4B/oHEgisB6kH4gcTCN4H0wcICB0I9ge2BxcIXghYCCkIVQiDCFMIJwg1CIkIewhXCGYIngiiCGMIgQjJCPQIoQiHCMUI+AjuCKcI7AgcCf8IuwjTCBoJ5QihCJQI3QivCFQILghMCGAI9gfjBwoIKAjQB5AHvgfiB8UHdAe3B+QHzAeLB4oH6QfAB4UHgAfPB9EHogehB9QH5AeTB6EH2Af4B7QHkgfLB+EHtAeIB9YHBgjgB5EHogfyB9sHrQelB/MH4QelB6cH7AcYCPUHFQhSCHMIMggeCHEIngh3CC0IbQiHCEwI6AfmBwQI4AegB3sHuweZB1YHVgeZB7QHbwdmB4oHqAdqB2YHqwfFB5MHRweCB74HuAeOB7gHGgg8CJYIfQknC/kLAgyEC2sKVAiIBgoGcgY1B6cHvQfSB8IHjQdaB6IHtgeRB1wHdge5B6EHegd+B8wHxgetB7wH9AceCMsH0gcQCD8I+QfvBykISAg4CDIIdAiaCI4IcQibCOoIAgn0COsILQkuCSkJRgl+CZkJAQnoCBAJLAnkCLgI1QjpCNQIqQjpCPUIvAhmCFoIWAgwCPcH1Af2B90Hkwd5B5wHrgdVB0gHaQd+BzEHCwcsBz0HIQfvBh0HMAcTB+EG6QYcBwoH7QbtBh8HCQfjBucGEAcUB8EGwQbrBg4H7QbfBv0GCwfyBr0G/AYNB+4GvAa3BvEG4wbRBtkG9wYQByoHUgd0B1kHNwdgB5UHnwdNB18HegddBwgHvgbfBs0GoAZ2BngGegZxBmwGkwadBmwGVgZ0BqEGfwZyBocGpAZ/BlsGlgbNBs0GkAbCBhMHXQe9B5UIGwrzChMLegoyCQ8HoQU+BbwFbwasBtIG7Qb0BsQGngbCBtoGwgaABr8GxQacBnQGqAbrBtYGsAatBuYG2AavBrAG3Ab0BrAGwQb9BiwHBgcRB2MHggdfB1MHkgeuB5sHgAe1B/8H8wffB/YHSghXCEkIXgiWCLIIjAifCM0I7QjMCLoI7AgDCdkIfgiMCKYIoAh7CGgIgAhaCCMIBggzCDkIEgj5BwkIOwgLCOEH/AdBCD0IGAgmCEUIWAhACEQIYghtCF4ITAhvCHoIegiBCKMIoQh9CGUIcwisCI0IiAihCL8IqwibCMsIAgkaCQQJEAkeCQoJ4gjiCO8IwQiICG8ImQijCF4INQhECF4ILwg5CGQIhQhfCGQIkgi4CLoImAjBCOII5wjhCAAJJgkqCR4JHQlHCUYJKQlFCa0JMgr/Ch4MNg3ZDYYN8As5CvsIZgg+CKQIHglXCU8JWwmJCYMJYglBCT4JYglSCT0JPglkCV4JVAlQCVYJXgk7CTcJRQlPCTYJMAlACUoJQgkpCVAJUAksCQ0JRglXCSoJBgkSCVYJHQkHCSMJTgk4CREJLQk9CSsJHAk2CUMJKwn/CPkIOQkqCf0I3wj6CCQJ9QjECLMItQiNCGIITQhHCCkIDAgXCCQIHgj+B/AH9wfzB9wHyQffB+sH4QfSB+8HAwjmB9cH8gcpCBMI8wf9ByYIIAjyB/0HFQgZCPQH/AcYCB8ICwj1BysIUAhiCHIIngioCIUIgAirCNkIzgi1CLUIvQiOCDgIIggfCAoIwgeoB7gHswePB3UHnAetB58HhweWB8MHpweMB44HnweRB3wHfweYB6EHageRB+wHYgjrCCUKWQsSDAYMGgvlCOsGuQWRBWsGQQeWB6EHjgeIB0oHKgczB1MHYQcvBzsHVgdeB0UHQgdqB3oHYgdKB3AHgAd2B2gHiQecB5YHjwefB9kHzAeuB7YH3QfhB8MH0gf+BxsI5AfqBxgIMQgoCCYIbwiDCGcIRAhiCKwIswihCJIImQiKCGgIaAiACGoIIwgVCBkICgjMB7IHxgfIB6MHbQd9B4UHcQdSB2AHgwdnB1AHYQebB4AHdweKB6QHkAdxB3cHkgejB4UHgAerB7YHkQdsB6IHtQekB40HqwfXB8IHsgfDB+kHAQgNCCsITwhJCCcIQQhoCHgIVQhNCG4IawgvCOMH3gfeB8gHpwepB7IHjQd1B38HmQeDB3UHeAd/B28HTwdoB4gHhAc4B0AHggefB4UHbgewB/kHRgjFCNYJQQvxCwIMWgulCUcH7QXABXcGUQeYB6UHnAeDB0AHQwdpB3QHWAc5B1kHcgdpB04HWAd6B2EHTQdeB5YHjAd9B4YHpge3B4kHjQewB9AHugecB80H6AfRB7YH3AcCCBEIDwgiCDgIMQgoCDcIeQhxCFkIYQiICJsIeQiMCLYIzAiaCH0IkAiXCHwISwhWCEwIGgjcB9oH6gfCB5IHfgeYB5QHdwd1B44HjgdcB2UHhgebB3kHZgeRB6wHngeDB6EHzQfJB6MHuQftB9MHswe8BwAIBAjWB8YH4AfxB7sHtwfSB+gHzQe1B90HAQgOCBoIOAhaCFwIRghPCH8IbghcCGcIhQhlCCAI7AfUB8EHjAd9B4oHkAdVBz8HZwd4B18HRgd4B38HYAc5BzwHbAdeB0kHTAdqB2QHPgdGB4gH0wcICLgI0wkIC8QLwQu7Ct0IxgaMBeoFmAYtB4AHqAedB2wHUwdpB5wHfgdeB2wHmAeSB1sHaAeMB6AHiAeQB58HngeMB3oHpwewB50HkQfHB/EH2AfKB+YHFwgACPYHFAhECEUILwg5CFAIXwhLCGkIgQiKCIkIjwisCLMIngiGCKQIugikCIoIhwisCHcITQhACEUINwj6B+wH6wfcB64HoAenB6EHigd6B4gHiQd5B24HnAeqB5IHdgd0B6sHiQd1B4gHtAfBB6sHrwe5B7IHhAetB8sHzge6B60HugfHB70Hqge8B8MHsgeeB6EH1QfPB6UHqAfZB+EH2Af/ByUIMAgbCDAIUQhaCEYIKghSCGMINQjhB7sHyQeiB3cHZwd9B3MHUQdRB3AHagdDB0UHXQduB00HWgd9B4QHaAdSB3oHnQegB5MHqwf3BywImAhzCd0K3wsZDJ4LXgoqCJAGMAaeBlMHrAfRB+8H2wefB3kHnwesB5sHhgehB74HtgerB7oH+AfdB8IHzgfxB94HugfKB+wH/wfnB+wHBwgUCAoIAQgxCEcIQAg3CGMIcQhbCFIIZwiTCH0IeAiOCLAIsQiECJQItgjDCJkImgiyCLYInQh/CJwIogiICGgIfghoCCQI8AfsBxYI5gfBB78H0wfHB5UHkgelB6wHhAdmB5MHswenB4UHqAfFB8IHqQerB8QHuQe6B9YH+gfUB7cHxAfqB+MHxAfPB+0H/gfUB84H3wfnB+MH5gcNCAoI5QfCB+QHHQgXCCQIVgh9CHEIaQiDCLMIvQiQCIcIlAicCHYITAg1CBQI5gfBB8sHyQevB5AHoge0B5AHbwd1B68Hjwd3B4MHqAe6B5gHoge8B88HwgfUBw8IRwh7CNUI6AkwCxkMVAzeCyAKDwifBkcG+waNB+AHFgg1CCsI5QfmBwQIEwjoB94H+wcKCPgHzgfuB/4H9QfnBwkIEgj7B+0H/wdBCCsIFAgdCD0IPAgeCBwILgg3CAoIEAhJCGoIXQg8CH0InQiXCH8IgwizCKsIoAivCN0I5gjUCNUI7AjuCLgIrgi6CMUIswiTCIwIcwhBCA0IKQgfCO4HuAfFB9UHvAeTB34HqgeXB3YHdgeaB7sHkAeSB7AHxwehB5MHtgfMB74HoAfMB+UH3QfJB+IHAQjnB9AH3QcMCPAH3Qf0ByQILQj5B/oHEwgcCOAH5wcRCDQIRAhSCIEImQiNCHUIkAjPCNIIxQjFCOYIxQhtCDgINQgrCOAH9gcdCCQI/wfgB/oHCwj6B9EHAwgRCPUH1Af2BxAI+QfgB+cHIAgUCOYH5QcjCHUI6AjUCQkLFQxFDJgLHApXCNIGEwa4Bl0HugfSB+4H+QfSB6wHpgfNB70Hsge8B9YH6AelB6YHvgfMB7oHrAfUB+MHyQe3B9kH7gfeB78H1gf/B/oH7wf6By4IGAjsB+4HIghQCDEIMwhSCHAIWQhMCGQIfgh9CEoIiAirCKYIjAiZCK8IlgiDCIoIoAh3CDgIJAg5CDIIDAjnB+EH6wfLB5UHowemB4MHTQeAB6YHnwd8B4IHqAecB4EHdQeRB48HfQeCB5wHoQdoB2IHgAecB3oHbQeIB58HmQdvB54HtAeiB4EHiwetB5wHiweaB9AHwQeSB4gHsAfkB9MH6AcQCDAIHwgPCD0IZAhhCC8IXgh7CE8I8gfHB8wHqAd+B24HmQePB2QHXAeBB5sHewd4B5UHsweNB3kHlgexB68HlAe1B7oHpweVB7UH9wcnCHQIEwlECokLGAwADCsLXQlaB3IGfQYOB3AHsAf5Bw0I5ge8B9cH7wfhB8AH0gcGCP4H4gfbBxMICwjtB/YHJgg/CBkICwgoCE4IKggVCDgIVAhQCDAIawiECHkIXwhlCJkIjAh6CIcIwAjtCNgIxwjSCOsI0QjGCNwI9wjRCMEI3wj+CAIJ2AjMCMUIpgh6CHQIkAhhCCMI+wf5B+8Hzwe6B7kHuweMB4oHoAeuB4YHbgeZB6sHhwdRB3wHmgeYB4QHige3B6YHkwedB8YHxwefB54H0AcBCMEHtgfRB+8H1AfGB+oHEQgdCPwHJQhKCE0IPQhUCI4IjAhwCGAIjQiQCEUICwj+B/UHtAecB6MHrgeJB4IHoAe7B7oHlAetB7YHpQeOB6YHywexB5kHrAfyB+kHygfHB/EHMAh9CD8JYAqICx4M4QvnCj4JZAdCBmUGzQYtB28HtQfLB6sHiQeJB8EHrweMB4gHqgfQB6IHpge/B9AHxgfQB+4HAgj4B8UH5gf8B/oH7AfzByoIFQjuB+QHFQg3CCwIOAhfCGYILAgyCGcInAiICHcImAivCKAIcQiuCNkI2wjBCL0I3wjNCLUIrgi8CKkIeghiCGQITwgXCAcIDAgLCOQHnwezB8oHvQeQB5oHsAeiB3wHhwenB5MHfAeEB8EHyQemB5sHtgfUB7YHsAfMB/EH4we/B9EH6wfwB9IH2wfoB+kH6AcKCEYIQggyCDoIcwh6CGYIawiPCKIIbghHCDQIJQj0B74HxgfMB7MHfgeHB4oHewdpB4YHtAeuB5wHnQfDB78HnweRB6IHwAeSB40HrAfWB98HBwi0CKgJtwrFCx0MzAtmCkAIcQYnBlMGuQYwB6oHuAeVB4AHiAeTB2wHaQeCB5wHiQdeB3kHpAe0B4YHoAe4B60HkQeqB8sHtweYB5QHygfFB6kHrQfVB/IH0QfYBwEIKQgQCAIIMQhVCE0IHQhACGUIYwhMCG4ImwieCIoIggi4CLIIjAh/CJoIugiLCGgIWAhKCBMI3gfkB+MHvgd2B4wHpgeUB2QHWgeEB48HggdzB4cHiQdsB20HkgekB3kHcgeTB7YHiAdoB4kHrQerB20HpwfSB8QHlgecB8sHyQfBB9QHHghFCCsIIAhFCIsIdgh1CIgImQh6CE0ITQhLCCYIyQfkB/gH2geYB3UHogelB5AHggegB5cHeAd6B6EHvgeLB4kHpQe/B6wHjwemB8EHxwezBxwI2wjDCcQK6AtfDNILLgr4B0kG5gUoBtQGmQcHCLEHgweIB6QHigd2B5kHuQezB3kHkwezB7oHsQfJB+8H3wfBB7sH8wf1B9gH2Af5BwwI5QfTB+wHDwjtB80H/ActCDQIBQgiCC0IGggJCEIIiQiLCHcIdQioCKsIgAhwCJAIvgiSCH4IlAi0CIoIVwhjCGUIPgj3B/sH+gfhB7cHoAfGB58HcgdrB6EHogd3B2IHcweIB24HZgeBB6QHigdsB48HsAeqB3sHnQfEB74HmQelB9IHxAeiB5IHwge9B6UHqwfUB/IHsAenB8sH+wf+BwAIJwhHCEoIOAhpCIIIcQhOCFkIgAhcCBUI4gcKCOgHsQeeB7AHtQd/B3cHjAefB4EHdQeNB58Hlwd5B5gHqQelB5wHsQfRB9QHwgfABwoIVQiaCFAJjQoADGoMNQweCy4Juwa5BRUG6QaZB9AH0QfHB68HlweaB8kHvAeiB54HxAfIB7UHuQfaB+wHyge8B8gH3QfWB88H7QcFCAAI4AcICCMIHAgCCAsIOwhECDwIOwhZCFcISAhWCIUItgidCKMIzQj2CNIIyAjaCPgIBwnpCO4I9AjlCMwI2AjuCMYIjwhsCHYIVQgfCAMICQgbCNEHrgezB8IHnQeMB5kHqAejB30HhweYB5EHfwedB7QHoQeRB58HzwfNB7gHugfaB/gHzwfEB90H/AfmB8MH0AfmB+oHzAfxBwoIAAjmB/cHBgj/BwkIMghmCF8IQQhJCHoIpAh7CHwIjgiNCEwI9wfqB+kHzQeLB5EHjwdyB0gHQgdoB20HXgdYB4IHggdaB0wHaAeSB2cHXAd6B6cHogeKB6sH6QcrCFoIUAmvCrgLHAwBDLMKggikBssFKwb+BpMH3wfsB9oHjwd+B5kHsgeEB3YHmQewB5wHXgeGB7AHqgeCB4YHtge9B6UHjAekB68HmgekB9IH6gfJB70H1Qf5B/MH5QcBCCEIJQj8BzoIaghsCE8IVAiMCJIIhAiFCL8IwwimCKgIzAjdCLMInwihCKcIjQhlCFsIWAhDCAAI9gf6B+cHvweqB9MHuQeZB5kHywfEB5QHhgemB70HnwetB8kH1we5B5QHtwfcB+AHvQfTB+oH5gfOB8wH6AflB9gH2wcNCBsI9gfpBwUIGQj/B/QH/QcHCOsH3QcfCGIIdAg7CEoIgAiYCIcIfQikCI4IbAhaCFsIMwjZB7QH1Qf1B50Hdgd5B4sHhAd2B44HngePB2EHjAeiB5MHdQeHB7wHuAekB6IHyAe+B68H2AdMCPUIrQnACrgLJAySC2cJdwc+BuUFQgYYB6IHwQeRB2gHhQd4B14HVweGB38HZgdgB3oHpAeNB5oHvgfWB6kHfgerB+AH7AfGB+IH+gf0B+AH9wcdCBcIBwgNCEoIUAg9CDwIYAihCGgIUwhsCJ4IuAieCLAIzwjZCKUIxwjuCOEIrQijCNwI5Qi9CIoIkQh+CEcIIAgYCCEI3wfBB9MH8QfKB6IHrAe3B6oHfQeLB5sHjAdxB5MHsQehB4cHgAedB64HjAeQB8EH0wesB6MHwwfrB80HswfIB+UH6Qe/B8cH3QfIB5sHsQfrB+AHwQe8B/kHAAjjB+QHFghdCCwIIghICHoIawhPCHUIlgiRCGoIWQhCCBII1QezB8cHrAeNB4UHoweoB4UHbAd0B5kHpQejB6UHrAefB5cHrgfFB8UHmweqB8IHwwfBB/sHhghJCUcKXAtADAEMdApsCK8G/QVHBtMGcAffB9EHlAeSB6IHogd1B3wHnAefB4EHcwe2B78HoweMB70H0getB6UHyQfdB74HtAfFB9gHtAeqB+8HIAgTCNUH8QcZCBsI/wcFCEAIUQhFCD0IawhxCFkIVAh1CKsInQihCK8IuAimCI4Ipwi6CKkIcQiNCKEIgwg9CAUIHwgECM0HpAfEB9IHpQeJB5YHtQeOB3UHhweuB6QHdAeMB64HtwebB6QHwAe4B5UHogfkB+UHxQewB+MH6QfMB78H1Af9B90H4Af0BwEI5AfCB90H/Qf/B90HBwgWCAMI5AfuB0gIXQhVCFgIkwiYCIMIiQixCM8InwiVCJsIjAg6CPwHAQgCCOIHswfAB80HwwerB7UH1wfGB6IHkgfGB8cHrAelB8MH+QfIB7UHzQfxB9oHzAcTCJkITwkzCm4LPQwuDBwLLAmRB7QGhAbdBoUH3gfRB8YH2gfoB6MHnge+B9wHvgenB70H1QfZB80H1wfqB94HugeqB+QH5AfOB8YH9wf4B+EH3Qf7BzAIDQj+BxUIPAg6CBkILwhMCFUIQghqCIcIhwh6CI8IvgjHCLAImwjFCOcIxgiyCMUI4wi4CKAIpwi7CKUIUAhOCFAIKgjRB9UH4AfHB5gHmgfEB8gHrAeQB7YHwQenB58HuQffB6kHmAe0B+AH2AerB7wH1gfaB7gH2wf9B/YH0AfCB+wH4wfLB8IH3QflB7YHnQe4B/4H1AfXB/UHEwgPCAkIMghiCHcIVQhbCHcIbwg9CBQIEwjwB7gHjAeiB5wHZQdPB3QHrwd8B2EHaQd6B1AHMAdfB4UHfgdaB2wHigeIB2cHXwe0B9gH7AcoCNYI+wkaC+MLFgyBC18JoQe9BqwG7QYqB4AHyAfjB7gHqwfSB9gHtAeqB9cH0gfAB8MHAQj/B9wH3AcCCBoI/gftBwUILQgaCPgHDwg2CEkIKQg/CGQIaAhMCD8IWghWCFAIXQiOCJQIgAhzCIIIvAicCIwIlgiqCKAIgwipCMUIsgh1CJIIqgiSCFcIPAhkCFQIFgjcBwUIAQjDB5IHiwelB2IHUwdoB30HXgcsB0MHXAdVBy8HMwdQB1AHPQdYB24HagdLBzEHXAeAB2cHWQdtB4sHegdvB34HlAd4B18HfweiB6QHcgeMB7sH2wfjB+oHJQgpCBoIHghgCGkIQAgsCEYIewgxCO8H0QfNB7AHjgePB48HfAdRB2sHjweOB2oHWgd+B4YHewd0B54HpAd+B3QHmAfGB5MHewemBwQIVQjxCPsJHAvwCwMMTQuVCZoHGwbcBZIGLQeBB6AH0ge1B4IHeQedB7IHpAeZB6MHuAeqB6wHtAe3B6wHhgewB80HxAelB6YH2AfVB74HuAfiB+cHzwfUB/8HKggACPcHDQgvCDkIHwhPCHcIeAhiCHkImgiaCIQImwjaCNUItQilCM8I6QjECKoIsgjCCIwIZAhVCE4IIQjwB+4H+wfyB6QHsQe7B7IHmQeLB7UHtQelB58HugfCB5gHjwe2B98HtAe1B9kH/AfhB7oHzAfrB/IHygfoBxgIIwgCCOQHHAgaCP8H+AdACEoIMAglCDEINwgNCAwIHQgpCB8IGghCCHIIiwh2CIsIuAjGCLMIsgjTCNoIwQimCMcIoQhXCCcIJQg9CPsH2wfgB/MH5QfLB+IHAAj/B74H4wcCCPkH1wfhBwAI/gfsB+sHLAhECB0IIwiCCCAJwwnQCusLsgy6DEULKAlLBzgGIgYBB8oHKwghCP4HCAgDCOsH2Af+BycIEQj4B/sHHgj9BwAIGQgvCB4I/QcZCEAISQgVCB8IQwhKCC8IKQheCGAISgg/CGgIfghrCGMIeQijCJQIfwiVCMgIxAivCMcI6Qj2CNMI2AjwCPAI0wi+COEI3Ai6CJsIrAixCHIIQAg+CGEIJAj1B+cH6wfRB6cHtAfIB8MHlQd5B44HjQdsB1wHpge+B54HcgeUB7MHpQeeB7AHywehB5sHrgfEB7kHqwe3B8YHvQeHB7IHyQe2B4sHfQe4B6YHgAdyB5kHpwd/B2wHhAejB3oHbAd6B4oHbwdkB5AHxgfnB+EH8gcOCA8I/AcKCEUIQQgkCBQIOggcCM8HlgeOB7QHqgeXB5QHnAeLB30HmAewB68HmQevB+QH4wexB6wH0gfZB9QH1gfuB/gH1AfbBywIrQhTCVgKeQtMDEgM+gr9CCQH+wXCBZIGUge0B6sHcgd8B3QHZQdiB4QHkgd2B2IHbwedB4kHhQeYB68HnQeIB7YH2AfNB6MHwQftB/AHzgfQBxYIIwgZCBYIMAhMCC8IJQhGCHMIYQhmCIEIoQifCIkIrgjfCPgI2gjsCAEJAwnxCOUIDwn/CNgIuwjICLEIaQg5CDkITggQCOEHxAesB3gHTQdPB00HMgcIBxgHOwcyBwcHFAceByIHDwf8BiUHJwcEB/sGGgdABzYHLAc1B0YHMAcmB0AHZwd5B0YHZAeMB50HkweGB6AHpgelB6wHzgfGB60HsQfTB+YH2Af0ByAIPggpCDEIWAh0CHUIWwhcCHEIZwg2CAII4Ae1B4kHcweRB6cHeQdXB2MHiQd/B3gHigenB5IHhQeaB7UHvAeTB58HyAfRB8AH2QcFCCcIXAjNCKsJ+ArXCzMM5wvECm8ICQd9BpMG8AZAB5cHwgewB24Hdgd/B3UHYgdlB48HhQdtB2UHhQeTB2sHXweDB6kHmAeTB6YHvwerB40HlAepB7sHvgfzBw8IBwjuB/AHGwg5CDoILwhOCFoIRghACFgIdghgCGkIfwiQCIIIhAiUCKEIlghZCG0IeQhuCFEIOQhHCBwI6wfWB+QHzgefB4AHewd8B14HVQdkB3wHcwdRB1IHYgdoB0cHYgd6B3YHXgdcB4IHggdzB28HkQeTB5QHkweZB7sHsweoB6wHuge5B64HvgfKB8AHngewB7oHugezB7UH6wf1B/8HFAgeCBsIHQguCEwIaghQCEQIRwhBCAIIvAefB54HmAdhB2MHcQdcByoHGQc+B04HRgc1BzsHSwc/Bz4HUgdoB2MHTwdNB2IHdwd/B7YHFgibCEsJsAqzCwkMhwslCisIvgYYBjgG5AZWB3kHdQduB4AHSwc2B0AHVwdVByAHIQcvBykH9wYQBy4HPQc9B0IHagd4B24HYQd6B5kHkgecB8MH5QfWB98HBggzCC8IFAglCEYIXghZCHwIswi8CKAIrgjTCOwI7AjeCOQI9QjcCMUIyQjrCMMIuAi6CLgIpQhXCDoIOwg2CPsH7AfdB8EHoAeTB5YHkAd7B2kHgwd4B2oHZwd0B4oHQAczB1EHbwdJBzUHRgdPBz0HHgcqBzgHLQcRBxMHKQckBw8HBwdBB1QHGgfyBgEHLwchBw0HFQcwBysHCAcABw4HGwf9Bh4HUgdvB20HaAeWB7MHsgemB8AH7gfaB8sH1gfkB50HXAdQB24HbwctByoHQAdMBzEHNQdYB1oHNwcrB0UHWAdYB1AHYweEB3sHZQdkB50HiweGB7oHNwjtCOkJJQsDDBcMKQvnCAIH0wWCBQYG2QZlB30HRQczB0EHLQcrB0wHfAdoB1oHYQd4B4oHgweaB7kHxwevB9UHDggsCCkIJAhSCHQIdwhsCIgInAiFCIAInwjFCLsItQi+CM0IxwizCM4I9QgECd0I5wgRCRMJ6gjUCPUICAnsCLUIswizCI4IaAhbCHEIOwgKCPkH+QfPB5YHkwebB5QHcgeCB6kHpwd2B0sHiwejB6EHmQeqB9EHsQejB8gHAgjvB+cH7Af3B/gH4Qf1BxEIGwj9BwMIJAgjCPwH7AcuCCoICwj2BwgIHgjyB8kHzwcNCPEH6Qf/ByEIJQgDCPYHDQgnCO4H8gccCCoIGggsCHkIiAhmCEQIfgjICK4IlQiqCN8IvgiFCGIIYQhpCC8IIwg3CEsILwgaCDsIUAhFCCwITghcCFIIQwhcCHYIYQhYCHEIkwhxCFIIXwiTCL0I/AjQCe8KCwzVDOIMMgyCCjYIYAaIBgkHnAcaCH4IeggwCPsHBAg/CCoIFQgqCFYITAgyCFcIgQiGCE8IaAilCLMIiwhxCLAI1QjfCN4I9QgRCQAJAwknCUcJMAkjCTQJWgloCVkJWAlzCZIJdQmLCaYJrQmfCZUJygnSCboJpAnBCd0JuQmoCb4JygmlCW0JXwlqCTEJ6QjtCAEJ+wi5CJsImAiJCG4IawiRCJkIewhTCF0IfQhpCFwIcQijCHYIUghXCHcIcghwCIUIoAimCHQIhAifCJsIewhyCJgIpAibCIoIhgiQCGwIUQhdCJAIXgg9CDsITAhGCAgIBAgaCCcIAwj0BwwICAjjB9EH/AcSCB4IMghkCHoIZwhYCGwIsgiUCHwIhQibCIUIKAgKCAoIAgjBB7EHxwfKB60HjAemB7kHtwewB8sH3gfIB7oHyQfvB80HvQfNB+cH0wehB74HAQhTCLIIvwkFC/ULPgzUC1kKXAjIBh4GdwYSB10HhQelB8MHmgd0B3gHlQeJB1UHXgeCB5kHcQduB6YHwgeuB5UHuwfWB84HuQfbB/kH7wftBwUIKQgsCCMINQhaCFYIPQhWCIEImAhvCH8Iogi1CLMIuQjXCNAIwgjFCOkIFAnuCNAI3Qj/COgIwAi0CL8ItAh+CGkIYQhLCA0IAwgGCO4HugeSB6oHtAeaB3IHeAeSB20HVQdnB5EHfQdhB2oHjgeMB1oHaAeOB6QHhAeOB8EHzQekB3oHswfbB9AHqAe1B+AHzQe7B8sH/QfHB6wHugfcB88HqQe3B9QH5gfaBwEIOwhLCCsIDwhACFoIUQg9CFkIfAhICAsI6wfdB5MHcQdgB1cHWQccBxkHNwdKBxQHBgcZByYHHwcRB0cHRwcrBxYHNwdfB1QHPgdCB4QHswckCAkJSQqCC8ILfQtkCpUIowYFBi0GlAbtBioHbgdoBzwHHAdJB1cHPgcwB0UHdwdZBzMHNgdZB10HLAc5B10HbQc4B0MHXgdhB0wHQgdmB3MHXQdCB2EHigeBB3kHhwelB5UHjwegB8EH1AeyB84H/AcVCPUHFQg8CEUILwgbCEkIZQhTCCwIPghYCCkI/wcACCgI+ge9B6cHtwe/B4EHdQd/B4AHTwdOB2UHYQdABzAHSgdNBzcHIAc6B0kHLwclBz8HbgdQBzQHPgdfB1gHPQdJB2IHawdCB0UHZgd/B3cHRQdvB4gHfQdkB4AHnweBB2kHdgekB50HjQeWB7IHsAeKB5gHvgfcB8sHAQg2CEMIMAguCHQIiQh6CGsInQiiCG4IOAgZCAsIygeVB5YHxAfbB5IHiweaB54HggdoB4QHkQd+B3AHoge6B7MHnweqB8sHtwezB9kHIggwCJkIbgmcCu4LUAw4DDoLVQn7BigGWgbqBnEHyAcACPMHwQeeB9YHCAjtB9UH4wcTCPkH7gcCCCoIQAghCB0ILwhACCgILQhNCFkISwg9CFkIZwhiCFwIdgiiCIEIXwhrCLYIpAiQCKsI5gjyCMgI1Aj5CBEJ9ggACSEJKAkRCQYJNAkoCQkJ+QgTCRUJ3giuCKYIwAh5CEUINgg8CCoI8gfjB/UHBAjOB8MH1wfZB7wHnQfEB8sHvAeyB9QH8AfPB7YHwwfrB9EHyQffB/8H9QfcB+cH/gcFCN0H5wf7B/oH4wfXB/UH+AfiB9EH9gf8B+IH0wfdB/EHzQetB7cH3AfXB6AHnQexB7gHiQeTB7IHxwfRB+gHFAgbCBAICggpCFIIQwgzCDsIYAgtCPIH0AfHB7kHeAdtB30HgwdVB1IHaAdyB2UHSweAB4gHdwdpB34HpAeNB4IHmQezB5YHggeaB9oHFgiFCHUJsQrNCykMwQtzCmsIVQZcBfQFtwZMB5MHpAeCB0sHMwdJB2sHXQdAB0kHcgd8B0YHRwdmB38HYgdkB4UHjwd7B20HpgfCB7YHowfYBwkI6gfVB+8HKggYCAMIEQg8CFUILAhECGkIfQhwCJQIvQjCCKUIlQjKCOQI3QjLCOMI+QjRCLYIwAjVCJ8IbAhWCFYIQQj3B+kH7wfpB70HnQedB4sHaQdqB3MHgwdxB08HaQeZB3kHXwdqB4EHaAdnB4cHswezB5gHoge7B8cHqAe7B8UHuweuB8gH8QfiB8QHtwfUB/IH5AfYB+UHBwjqB/UHBAgECPEH7QcRCC0IKAgECBkILAgpCBcIFQhJCG0IfgiNCLgIuQivCLQIzQjrCN0I1QjTCMYIjAhSCDkIMQghCOkH5wfoB98H0gfYB/YH7wfoB+8H9wf+B+wH4wfwBwYI+Af3B/sHAAgJCBMIMQh7CPgIoAncCu4LWgzoC6UKWQiqBucFEwblBoAHvgfFB7AHjAdqB2cHcwd9B3kHhAeQB44HdwdLB04Hagd8B3gHagd5B3UHbwduB2QHfAd2B28HdgeNB3oHbQd1B4gHfQd7B5YHqgemB5IHtAfRB9kH1QfkBwoIFgghCDUISwhaCFYIVghgCGwIVAhMCE4ISwgpCAgIDQgGCNkHggdyB3IHbQdZBzwHRgdIBz4HMQczBzYHHgcbBzAHOQcfByAHIAcWBwgH8QYIBxoHEgf1BhkHLAcrBx8HHAdQB24HagdXB2sHhQdyB18HaQeUB6YHkweUB64HtAeZB6MHsAeqB48HsgfgB/oHAAgSCCkISwhkCHYIngikCJQIkgijCLEIgghCCB8IFwj9B+MH6wf4B/MHzQftBw0IHggbCAsIFAgYCBoIIAg4CEIIKggnCEUIYwhQCE0Ibwi0CAAJsAnRCgUM3AzVDNsL/gk9CDIHFQeOB+cHIghICGMIZghNCD8ISghfCFUIQghICGEIXAg+CE8IZwhuCF8IdQh+CHoIdAh8CJMIjQiCCIcIrAjJCLcIrQi/CNkI0wjiCPQI/AjqCPsIFAk0CUcJKAktCUEJSAk/CTsJWQlbCUYJNQlVCUwJPgkqCSAJQQkYCfcI3gjKCLMIhAhrCFsIRQgYCCcIIwgPCPYH6AcCCP4H8gftBwMIBAjzB+8H/gcOCPIH7wf7BwYI+AfnB+0HAwgPCOkH6wf5B/wH9QcCCAsIBgjxB+EHBQj/B+0H5AfuBwUI/Af4B/4HCAgKCAAIJghWCHAIZAh1CIgIkwiXCJ8Iugi4CKQIjAiCCEoI+Ae7B6wHzQfCB6MHngerB48HhQeVB7EHxQevB8EH0AfEB6IHiAepB6QHgweCBxQINggOCAgIZwhACV8KlQtiDH8M1QuxCcAHeAYMBnEGRAe+B9MHpweOB5QHlAeSB5EHlgeZB3sHdQeUB7YHpQelB7YHxQewB4MHjgeiB6cHnQegB7oHrAd+B4AHtgfDB7QHqQfOB9oHwwe/B+IHGAjmB+0HFQhACEgINAgyCEAIUAhLCHUIfghdCCYIDAgCCCcIWQhxCEQI9gfDB7sH0gfZB5EHcgdrB2MHOQcpB0gHYQdYBywHLAc9B0wHTwdEB1kHRgc8B08HeQdjB0EHOQdRB3cHTgdMB1oHZgdhB2QHfweQB4cHZQeHB68HrgeFB2EHkweoB5oHhgerB7cHogecB7QH1Qe9B80H6gcFCCIIOAhMCFcIUQg1CFUIiQiPCGgIUwhsCFkIGgjQB7oH0gfDB6oHngevB5QHhQeTB64HpgeLB5gHsge/B6gHuQfVB9UHwAfOB+QH3AfXB/kHZwgsCS4KVgtTDJkMqAu3CacHKAa3BWkGOgfWBw4I3gfAB7EHqAemB7AHtgfXB/cHAgjxB9oHxAfCB9kH+wfpB94H2QfZB9cH0AfgB+0H6AfRB9QH6QfuB+IH3wf0B+gH3AfnBxYIJggVCCgIYgiFCJMInAi/CPMIAwntCAAJHAkuCTAJVglkCVYJNQkhCTQJLwkhCRAJ/wjZCKcIigiQCLwIkgh3CG8IdAh6CGoIaAhqCGUISwg1CEMIWghvCIkIfwhrCFIIRAheCG4IZAhlCHgIhghsCGcIaAhsCHMIVQheCHAIeAhyCGsIcwhuCFkIRghYCFUIPwgoCCwILAgeCCkIUgh1CFkIWAhuCIIIaAhSCHIIiQhvCBcI6we6B4wHcweKB4oHVgcaB/oGFAcsBx4HFQcbByAHAwf9Bg4HIwcdBwoHIgdCB0wHKgc2B2cHqwcXCOUIPwpSC90LsAumCkgIdwafBc4FqAZYB40HiAdvB0wHIgcoB0YHXgdAB1wHXgdHBywHMQdzB48HewdWB2UHagdUB08HcQe5B6AHjQeTB6cHnQeVB7gH1wfUB5wHxgf9BwoI8gf6BzcISQhQCGEIiAilCIkIgwikCLoIvAi6CMwI5QjUCKMImwilCKIIYghYCEwIKwj6B9sH5QfMB6gHkAeaB6EHfgd0B40HmgeEB4kHkQeTB5EHdwd2B44HqAeXB6IHuQe/B7cHyQfUB9IH1AfsByIIQggqCBUIHQg3CC8ILAgsCCsIIwgZCEMIZwhqCFMIYQiRCLMIuAivCLkIwgjCCL8I0QjXCMEIpwiUCH4IKwj/BwIIFgj+B84H0gfaB80HqAfSB+cH7gfmB8QH7AfvB+QH4Qf9Bw4IFggUCBYIOghDCHcIBAnwCRoLEQx6DBgMvQpHCO8Gqgb4BngH8gdMCIEIcAg2CDgIVgg5CCoIQAhmCEgIOQhJCGoIbQhECD0IRwhNCDEIRQhdCF4IRAgeCEgIYAhhCFgIYwiBCHQIagh7CKkInQifCLwI5gjwCN4I8ggLCRQJBQk3CWAJWAkpCQoJWgl5CWMJQAlkCYYJZgk+CSsJMQkVCQAJ9AjoCMIIkAiCCH4IaQgkCCsISghTCEQIRghrCHUIXQg7CEYIaghXCEcIUQhyCEsIPQhOCGsIbghACEAIVAhgCEgIQQhkCHUIZQhaCIEIgwhrCFYIbAhhCEkIRQhfCIkIfAiUCMEI7ggACb4IzQj9CCAJBQn/CBkJHgn6CLwIjQhqCEgIKwgiCBYI9AfkB+wH9wfgB8sH2Qf+BwMI4gfoB/0HAwjWB/QHEggKCOMHyAf+ByIIUwi7CIoJqwqYCx4MDQw0C98IGgdHBmMGBAduB8YH8AffB5EHgweQB5gHiwdnB5cHoQePB38HmwenB5AHfQd/B5YHjwePB6sHzQezB4wHlQegB5UHewemB8gHxwenB5AHsge6B7AHsAfoBwQI9AfuBwQIHQgHCAMIGgg7CD0IDQgXCCoIKQgDCAsIGwgVCPQHywfQB70HkgdiB1gHZAc7BxEH/wYEB+YG7gYABwYH9AbeBvIG/AbsBtcG2gbQBs4G3AbsBvcG9AbgBssG0wYCB/QG4wbsBhIH+QboBu4GAwcBB+cG+AYTBxoH9AYaByUHEAfoBs4GEQcjBw4H9wYdBygHJgc5B2MHjQd+B4MHogfKB9EHpAe+B9MHtAdRBxgHEQcTBwkH8gb/BgAH5gbEBtAG9AbpBtoG3wb5BvUG3QbYBu4GCAfoBvgGHQcxBwMHBgdRB8oHcghhCcEKbAtkC5IKxwjsBuUFvQVGBh8HYQdZB0UHQAdABxMHJQdJB1kHLwc7B08HUgdDBzwHUgdaB1YHWAeDB60HhgdoB3oHrweRB5EHqgfHB8UHlwexB90H9QfoBw4IJwgdCP0H8gcgCD4IQgg7CFEIUwhNCF0IgwieCIcIeQiCCJgIlgh2CIYIlAiBCEUINwgwCA0I2wfaB/8H9QfFB5AHjQefB5oHkQeRB6IHpweeB6MHuQfDB6EHqge/B8UHpAexB9wH5AfNB9kH/AcCCOwH2QcACAsIAQjzB/IHDAgBCAMIGQgsCBAI6Af/ByEIKAgACPEHFQgmCBQICAhXCHYIYwhFCGQIpwisCKEIngihCHQISQgvCBkI3AezB7QHtAehB34HkweuB6oHjQeDB7kH0QeyB30Hhwe0B7UHswfDB+cH0geuB78HBwhFCIMIMglQCoELDQz2C/oKNgk8BxgGZgbzBnMHyQf7B/sH0AerB6cHxgfGB7EHtAfOB88Hsge5B9IH3QexB9cH7gfyB+UH2Af4B/kH2we/B+cHDwgGCPUH+QckCCIICAgKCCoIQAgvCEQIXghsCGYIbwh/CH8IewieCMwIxwimCIgImgjBCKoIjAiFCJcIgwhfCEsIQAgYCOIH3wfhB88HmgeMB5gHlgd/B2kHjQeVB3sHVwddB3YHYwdbB24Hiwd+B3YHhQefB5sHiAeUB7QHxQeOB5IHvAfUB8gHqwfQB84HvAe0B84H2we8B6sHugfPB8MHzQfnB/0H5gfIB+UHCwgfCB0INwhfCGUITwhZCJ0InAiBCHQInQinCHQINQgNCBII8AfXB8wHzwfVB7MHrQe/B9IHwAe2B8oHzge3B6EH1wfxB+QHwwe+B+AH2AfiBxkIegjjCKAJtwrZC2cM7QuOCroIAwchBogGLQe4B/wH+gfkB9kHywe/B9EH5wfKB7cHxgflB9MH1wfyBw8IBwi/B8cH9AcTCOwH5Af+B/wH3gfjBxUINAgoCBEISQiCCFgIOghSCIcIcwhXCFYIdwigCJMInwizCL8IrgiqCM8I4gjOCKAI2gjnCM8Irgi5CMYIhghLCDsIVgg4CAII5QfnB+UHtAeqB7MHrwd5B5MHpQesB6AHcweSB5sHgwdpB4wHrAeTB3YHewe4B7QHpQevB88H2wfAB8AHzAfJB5cHnAe9B8UHsAemB9QH2wfDB6gHuwfNB8oHwAfFB/EHzge9B9IHAAgYCBMINQhaCGYISQhRCHEIhgiACGQIawh1CFgIGwj7B+EHsgeTB48Hlwd1B1kHYweMB7IHgQd9B4gHjAd5B3UHdweHB5gHhAeMB6UHqAeaB68HDAhvCBMJDwpdCxQM6wv1ClAJIQcMBg4GngZBB4wHpQfEB8UHpgeEB5cHmweXB5gHrgfMB64HoAezB8EHnweRB6cHzwfNB6cHtwfNB8sHogfHB/gHCQj1B98HAAgMCAUI/QcbCD0IPwg5CEQIcghlCFsIcgifCK4IgAiNCL4I5AjCCLIIuQjJCMoIoAiyCLUImghxCGwIdghSCB4I+gcACOoH2wfIB7QHrQedB6AHqQenB30HhwedB7EHsgePB5IHqge5B7kHvAfUB7IHogfCBwEI7gfNB8sH6wcJCNIHxwfeB/QH0QfLB9sH4AfSB8AHwwfNB78HpQe7B9oH1QfTB+QH/gfzB+QH9QcoCF4IRAhPCHEIjgiBCHsIkAiSCIAIeghnCFIIHgjbB80H0QetB5oHrAfVB7kHmAeSB6IHnAdxB38HnAenB4cHjwelB7EHrQejB74H1QfoBw4IdAgoCSUKPwskDGEMRwtdCZQHegY8Br0GUAfBB+cHpAePB60HvAepB48HswfAB6oHlwfdBwYI8QfNB70H3wfLB7YH0wcMCAMI7wf5BxcILAgOCAMIGggzCDsILgg8CEkISAhDCGIIjwh6CGUIcAiiCK0IlgiZCLsIyAi3CNUI8QjvCMAIuwjICLoIlgiUCKAIlAhoCDQINQg2CAUI2wfXB/sH5gevB5MHnwesB5oHmgehB6UHmQedB7kHvgejB4UHpQehB5EHkgfEB8QHrwexB8kHywfDB7gHxgffB8sHrQfCB+EH6Ae4B7wH0gffB9QHrAe6B9EH0AfBB90H7wflB+AH7gcKCCkIMQg6CEwIWghWCHQIoAi3CIwIfgiKCHYINQjpB+8H5QfFB6cHwAfdB8IHpAegB74Howd2B3QHogfLB6oHnQeoB7gHpgfCB9oH2gfIB8IHHwicCC4J9glICz4MIwwiC3gJeAeOBm0GzwZfB7kHuwewB7YHwweiB5sHsAe3B6oHpgfVB+YH4QfVB9IHAAgKCAkIDQgXCP0H2AfXBwIINQgTCB8IPQhMCCIIEwgwCEoITwhICHYIhghqCEAIRgiMCJsIngihCI8IjQiTCK4I0AjYCMAIwwjQCNcIyQirCLIIsgigCIsIdQhiCDsIEAgTCEkINQgBCNkH6wf0B9wH0QfhB/cH3gfdB/QHAwjQB8UH6gf0B9cHwwfvBxQIBwjXB9QH8gfvB+YH9AcvCCoI/gfxBxEIKwgSCAgIGgg0CB8IAwgsCFIIXAhaCH8ImQihCKQIwgjACK8IogidCJMISggPCPwHCAgKCNAHxQfKB8IHlAe6B+wH8AfCB5QHtQfcB9oHugfCB9QHxwfDB9kHAQgOCC4IeQgGCeoJDwv+C18M4gtICkYIOwfnBv4GKQeDB7cHywfTB+4H1werB5UHqAfmB9YHvwe+B9cH+wfZB9EH3AfpB94HzQfiB/YH+AfpB/oHAQj5B/QHHwgzCCIIEQgTCCwILQgnCDsIYAhhCE4ITAhpCIoIbAhyCJMIswi7CKIIqAi5CLQIoAioCOEIvwiQCHkIcwhlCD4ILAguCBgI4wfYB9wH1geuB5YHoQedB4QHfQerB78HogdxB3YHsAeaB28HYgeYB4gHegd3B3sHegdtB4AHngeuB5MHdgeGB5QHiAdmB5cHqQeWB3oHlAfDB9YH5gf7BwoI5QfgBwQIOwhTCBwICQgXCCQI6wekB5YHiAdoB0wHVwdQBzgHHwckB0MHPgc2BzoHTAdOBzQHOQdkB4wHZgdaB2AHbgdxB6QH9AduCB8JFQpUC/ULvQuWCpAICgdGBiEGbQbzBjEHOgdMB28HfAdCBz4HWgduBz8HWgd+B3sHTAcdB2QHmAedB4EHewenB6QHpAe4B84HvgeUB5AHvAfiB9QHxgfWB/IH4QflBwIIFggcCC8IOQhRCFQITAhrCHUIgwiLCI4IlwidCKwIuwjACLUIcghjCGwIcAhSCCoIJAgSCOUHrAfOB9gHtweDB3wHmQeYB4wHhgeQB5gHgQd6B4cHhwdsB2gHeQeSB5oHeQeHB6QHqAdhB38HrAfAB7gHtwfdB8AHnweaB7gHtgeoB8UH/wcICPAHBAgyCFQILQgPCDoIZQhwCGgIawhwCFMIGQjwB/IH1geuB5AHkweNB28HXQdhB2sHLQcxB1kHdwdOB0wHbwd7B10HLgdcB4MHfgdbB1gHnAfcBz8I7ggSClwL7wvxCz4LagksBxMG7gVpBhUHYQeJB44HfQduB3cHegd4B3QHcgeAB34Hdwd+B7AHlgd2B38HrgfWB7cHsAe4B8IHuQfAB+cH+gfsB9UH+AcPCAwI/AcDCDAIKgghCDEIYQiDCGUIXgiECLIIqgitCMAI0wjACLMI1QjmCM8ImQirCLQIoQh2CEoISQg1CA0I6AfuB9QHtge3B88HxQebB5IHpQe0B40HhwefB7UHrgd2B4MHmgegB5MHiwe1B7AHnAeeB9wH5wfHB7QHxQfvB9kH1wfpB/cHzwfXB/QHBAj2B80H9gcTCP4H0gfrB0EIXQhUCEkIbwiBCIoInwjBCNsIqAiZCJQIgwhSCCoIHQgRCPMHtQeyB8cHzAfFB+IH9wfoB84HvgfIB8wH0gfmB/4HAAjiB+MH/QcVCPsHAAgvCJ4ITQkjCoELawyUDN8LXAooCK0GJQZ4BjsHvwfiB9gHyAfQB58HowfEB98HxQenB8QH3gfaB70H0wfvB/kH7wfdB+kH3gfTB9wHBwgBCPYHBAgfCBUIAAj8BwwIIggYCAgIKAhTCGgITAhICHQIjwiMCJYIsgi9CLgItAjOCN8IygjLCOQI4gi3CLAInwh/CG0IQQhQCFYILwjZB9YH7gfWB5YHjAevB7UHoweLB4sHlAd8B3EHfweUB40HcwdtB3wHgAeFB5IHpgewB5IHkAedB5wHlwfCB88HuQedB5AHnwfQB8gHwQfKB8gHtAeuB7QHtweaB7QH2wffB7wHmge5B+kHDQgcCCAIGAggCDkIXAh9CFoIPQg/CFcIUwjmB8AHxAfPB7oHhQd2B4EHjwd6B40HnQeQB3QHfAeaB5QHjgeXB6UHvwe6B8AH2gfxB8sH4gc6CLsILgkhClYLNQxsDO8L/QniB1IGvAVGBjIHvAftB+EHzwekB5QHpgfJB9cHqweeB7YH1gfAB7MH3wcBCPwH0wfUB+IH5AfZB9oH5AfuB/MH+AcOCO4H5Qf/ByoIQAggCDYITghVCFsIagiSCKoIqQihCKkIxgjQCMcI0gjmCNkIxwjICPEI8QjSCMEIyQjXCJAIZwhcCFQIHgjbB9MH5AfxB+MH1gfWB8QHpwepB8cHtwetB7AHngeyB68HrQe8B94HvgelB6cHuwe5B6EHqwfAB8oHsAewB9QH3gfEB7MH2AfqB/gHCAgdCAYI1QfGB+QHEAjrB+oHAggkCD0IRwhWCF8IXQhOCI0IpwiXCHoIhgibCGwIIgj5Bz0IIgjTB6wHwQffB60HmQewB9gH0Ae5B8MHzwfLB7cH0gfiB9kHyQfmBwYI+AflB/cHVwj7CLgJvwrpC7gMGgzAChYJlAfCBsAG/wZdB7MH1Qf0BwwIAAjfB90H9AfeB8wH3AcaCCUIAgj3BxYIQAgDCPYHEgg6CEAIAAgICCoIPggcCCYIPQg6CCIIJwhjCFsISghMCF4IWQhYCGoIigidCH8IfgiRCKoItAiwCL8IzAjLCLUIswjHCMMIpwilCJ4IgghUCCwINgg2CBgI9wfkB+UHwQe9B8QHwgepB6sHtwe8B64HhgeNB6YHrgeiB58HqQeuB60HrQe/B70HrQesB8cH9gfMB8MH0wfjB8sHvAfnBwEI6AetB8sH9wcZCCsIOQhWCE8INwgxCG8IhQhhCE4IXQhjCCkIFggDCN8HqgegB6oHsweoB3YHeweZB6QHlQeKB5gHkQeEB3wHhQeQB48HkwehB7QHwgfQB+0HGQhECA4JVAqYC2QMSwxHC4kJwgd6BgwGlQYQB10HfweZB7MHlAd1B3MHlQeFB4gHlAecB40HiwesB8kHyAeaB6QHtgewB5gHkgecB6gHsAe8B+QH8QfjB+AH8gcICPYH8Af5BwwIHAgSCBgIKQg2CCgIPghQCFQITQhOCGsIegh2CHIImQi0CIwIZQhVCEQIIQgJCPQH3AfCB5IHiAeAB3EHaQd3B28HXAdMB1AHYgdTB0oHTwdJB0wHSQdSB2oHgAdvB1sHXAdzB4kHeAeLB6AHnwd6B3oHiwePB4YHjQeaB5UHiAeEB6QHqQeFB38HrAf2B/gH8Qf1B/0H5AfvBxsIPgg/CBIINwg7CBsI4gesB6wHhwdiB1YHdAeCB2wHTQdCB2sHWwdbB2cHdQdwB1YHYwd+B4wHcwd/B4QHfQd/B7IHDghtCAQJ+AlfC00MZQykCxUKzwdRBuUFOAbmBn8HpwesB6UHngeRB48HtAfBB6wHoAeuB7gHrAecB7wH6wfcB88H3AfxB+cH6wfyB/IH4QfEB9oH9QcCCAAIDgguCCwIEggpCCkIJAggCC4IYwiRCIsIhQiWCL0ImAifCLkIzAi6CJgIoQi6CMAIigiLCIcIaAg6CC8IQwgrCP4H2gfjB+EHvgekB6AHpQeKB3sHfweSB6AHagd2B4gHfAdIB2UHiweWB4AHZgd/B4MHeQdxB4UHzQe5B5sHmQetB6QHmAeeB7AHrgegB78H2QfOB5gHugffB9sHswegB7EHsQeiB54H2QcECBkILQhECFEIMwg4CFEIawhqCEMIQwg4CAwIxge+B9EHwweRB3UHigeSB4EHZwdxB38HdweBB6QHwAe0B5UHmQe3B6gHjgeZB7kH0ge7B/YHZAgDCeEJFQs5DJkMJgzQCogI2QYWBiYGzwa5B+QH9AfsB9EHsweRB6wH0gfgB74H4Af9B/UH0QfCB/AH/wfpB8cH0wfzB+YH4wf4Bw4I7AfuBwQIGwgjCAUILghVCFYIMAg0CFMIZwhmCGYIlwijCJUIhwihCNUI3wjqCP0I+QjXCNoI+AgPCeUIwQi+CMMItwiACHIIWgg4CBMI9QftB98HygfAB+gH1we2B5oHlAewB6UHjgeSB6oHowd8B38HlAeiB4oHkgemB6QHhgdkB5UHrQejB4wHmAeuB4cHcgeQB9QH1AfBB8MH1QfDB7cH2gfmB8kHrQe4B8gHxQe4B8oH5QfiB9YH1AfuBwwIJwhBCFoIeAhqCGYIdwiNCHwIbQiICJQIcgggCP4H7QffB8sHsQeXB44HkQefB7wHzQenB4wHmQfHB78Hvge9B74HxAe0B8kH7gcDCNwH8AcuCIoIHAkiCoULfgzADBgMbQoLCHcG8gVaBisHqQfDB8QHvgeOB3gHeQeKB5UHdAd+B5kHswe7B6YHrAetB6EHlwe8B74HnweJB5EHtge0B7IHzQfzB+EHzwfdB/sHCQjdBwcIOAhJCDcIJQg1CE0ITAhACGgIhAhyCHoIoAirCJQIhAiOCKEIjghvCH0IhQhuCDMIFQgdCB8ICAjWB68HrwedB3oHgweVB34HagdpB3IHdAdmB3YHnwesB3EHbQeCB5IHfAePB6UHoQeQB6cHuwe2B64HswfZB9AHvge7B8kH2QfAB8IH4gcBCN8HwAfcB+4H2weyB9QH5gfUB7EHsQfsB+gH2AfVB+MH/Qf2BwYINghXCF0IVAhVCGcIgQhwCI4IqAigCG8ITAg6CCII/AfPB9EHxge4B7cH0gcDCOMHwAfAB+IHvAeuB74H1QfCB7cHuwfJB9cH0QfhB/UHAQgfCI0IUgloCoYLZwzLDDEMSgotCKMGKgapBmEH9gczCAYI7Af8BwUI8QfCB9oH+QcCCPMH6wf+BwgI+wfgB9kH0AfEB9UH/AcGCPgH3QfdB/kHDAgDCBsIJAgSCAIINAhUCFUIQgg/CGwIlgijCKAIxgjGCMEIxgjYCO4I2gjYCOEI6QjfCPkIEQkeCQ4JyAiqCJ0IighwCGUIdAhVCCQIBQgfCBgI5wfMB9gH8gfgB9cH3AfkB9UH0wfzB/sH5gfoB/gHCAj9B+EH4wf1B+8H7Qf8BxYIFAgLCAQICQgsCCYIIwgpCDAIJQgQCCgIOgguCAsIEQgXCB0IIggaCCAIFAj5B+IH8AcDCAoICggJCAgI7gfpB/EH9wflB98HBQg3CFkIVghwCHIIZghaCGQIgQiBCHMIYAhUCCkI+wfdB9EHygepB5QHnQe7B8kHsge/B98H9QfPB/QHBwgNCBIILQhFCEEILggpCGYIYAhrCJ8IEAnQCecKDQzGDMgM9QugCaEHbwYvBrcGqQclCDYIAgjJB8MHvQfAB8oH1AfBB6QHrQfWB+IHqweaB7gH4gfMB94H9gcACPQH0gfwBxEILAg7CEEISwhRCFAIVQh3CI8IjAiOCKMIwQivCMQI5wgACfYI7AgRCTsJSwkxCUcJUQlKCTkJMAk8CTIJCwnmCPAI1gi4CKcIpAh5CEMIGAgDCAMI3wfRB9AH2wf5B90H1QfNB8IHwgfVB9UHxwe8B9MH5QfuB+4H+AcqCCEIGAgbCCUIIAgSCBsIQQhqCGIITAhMCFYIXQhTCG0IfQh5CEEIVAiBCLIIYQhICFIIbgheCF4IZwhpCEYISghaCGQITwg6CFgImwixCKsIswjQCMkItgi1CM4I9AjRCMQIswiLCEgIBQgPCBoI/Qe1B9sH+AfwB9AH1gcGCAgI9wfyByQIIggHCP0HDggoCBcIGAg5CEMIQAhSCKwISgk9CkkLUQy1DCIMzAogCOYGXwavBm0HAAhBCCoI3AfRB9YH1AfGB/QH8QfeB8gH2wftB/IHzwfgB/YHAAjhB+sHAQgVCPIH+QceCCMIFQgZCDQISAg6CCoIOwhNCDcIMwhTCHkIYwh0CIYIiwh2CIUIqQjqCOUIzQjBCMgI2gjVCM4I1QjTCLYIpQioCIMIWAg3CDkIGAjoB7UHnweoB4QHWwdRB2gHWgc4B0YHXQdQBzYHKwdVB1gHRActBygHRgc0B0EHTwdOB0MHUwdbB1QHOgdFB1oHaQdxB0wHSAdhB3gHUwc9B1AHXgdWB0EHTwdUB0UHRQdcB28HbgdTB14HcwdfBzEHPwdWB2IHZAd3B7IH0AfWB9EH0wfxB/AH7wcECD4IEgjjB7gHoAd6B10HSQdFBzgHHwcHBxEHBAf+BgkHIwcrBxwHCAcUBy4HKAcfBxwHGQcWByQHPwdrB2YHlgcaCPoINAouC58Ligv3CQcIMQa/BfQFXQbCBjQHWQdQBxAHHAcbBxIHGwc3B0IHNwcNBzMHWQdWBy0HMAddB4QHcwd1B4MHkQeaB5IHmQebB5cHmgfAB9EH2QfYB8IH1gfnB+0H/wcQCBcIFQgTCD0ITAhMCFIIfQiMCI4IkwiiCKIIhQh5CIgImQiTCIEIcwhsCFkIEgj0BwEIDgjGB7EHsAe2B4EHegeeB78HhAd0B4QHlAeTB3kHeAeBB44HiQeZB6UHpAd6B4gHnweZB30HjQe7B8IHvAe4B70Hvge3B7QHwwfNBw==";
+
+// ================= 설정 (피코 ecg_ble.py 와 동일) =================
+const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const DATA_UUID    = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const FS = 250, WINDOW_SEC = 5, REC_SEC = 30;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ================= 저장소 (나중에 Firebase로 교체할 부분) =================
+const Store = {
+  _get(k) { try { return JSON.parse(localStorage.getItem(k)) || []; } catch { return []; } },
+  _set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+  saveSession(s) { const a = this._get("ecg.sessions"); a.unshift(s); return this._set("ecg.sessions", a.slice(0, 30)); },
+  listSessions() { return this._get("ecg.sessions"); },
+  saveQuiz(q) { const a = this._get("ecg.quiz"); a.unshift(q); return this._set("ecg.quiz", a.slice(0, 50)); },
+  listQuiz() { return this._get("ecg.quiz"); },
+  clear() { try { localStorage.removeItem("ecg.sessions"); localStorage.removeItem("ecg.quiz"); } catch {} },
+};
+
+// ================= 탭 =================
+const TITLES = { measure: "실시간 측정", compare: "표준 파형 비교", quiz: "심전도 퀴즈", history: "기록" };
+function showView(v) {
+  document.querySelectorAll(".view").forEach((e) => e.classList.toggle("active", e.id === "view-" + v));
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+  $("title").textContent = TITLES[v];
+  if (v === "compare") renderCompare();
+  if (v === "quiz") renderQuizStart();
+  if (v === "history") renderHistory();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showView(b.dataset.v)));
+
+function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => e.classList.remove("show"), 1800); }
+
+// ================= 실시간 측정 =================
+const N = FS * WINDOW_SEC;
+const trace = new Float32Array(N).fill(NaN), beats = new Uint8Array(N);
+let pos = 0, proc = new EcgProcessor(FS);
+let source = null, device = null, demoTimer = null, demoStart = 0, demoSent = 0, demoData = null;
+let lastSeq = null, lost = 0, received = 0, startTime = 0;
+let rec = null;                    // 30초 측정 중인 데이터
+let current = null;                // 비교/퀴즈에 쓰는 최근 측정 결과
+const STD = makeStandardBeat(FS);
+
+const canvas = $("scope"), ctx = canvas.getContext("2d");
+
+if (!navigator.bluetooth) {
+  $("msg").className = "msg warn";
+  $("msg").textContent = "이 브라우저는 블루투스를 지원하지 않아요. 아이폰은 Bluefy 앱, PC는 크롬에서 열어주세요. (데모 체험은 가능)";
+}
+
+$("btnConnect").onclick = async () => {
+  try {
+    setStatus("검색 중…");
+    device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "ECG" }], optionalServices: [SERVICE_UUID] });
+    device.addEventListener("gattserverdisconnected", () => stopSource("기기 연결이 끊겼어요"));
+    setStatus("연결 중…");
+    const server = await device.gatt.connect();
+    const ch = await (await server.getPrimaryService(SERVICE_UUID)).getCharacteristic(DATA_UUID);
+    ch.addEventListener("characteristicvaluechanged", onPacket);
+    await ch.startNotifications();
+    startSource("ble");
+  } catch (e) {
+    setStatus("연결 안 됨");
+    $("msg").className = "msg warn"; $("msg").textContent = "연결 실패: " + e.message;
+  }
+};
+
+$("btnDemo").onclick = () => {
+  if (!demoData) {
+    const bin = atob(DEMO_B64), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    demoData = new Uint16Array(u8.buffer);
+  }
+  startSource("demo");
+  demoStart = performance.now(); demoSent = 0;
+  demoTimer = setInterval(() => {                       // 실제 기기처럼 250Hz 속도로 공급
+    const due = Math.floor((performance.now() - demoStart) * FS / 1000);
+    while (demoSent < due) { ingest(demoData[demoSent % demoData.length]); demoSent++; }
+  }, 36);
+};
+
+$("btnStop").onclick = () => {
+  if (source === "ble" && device && device.gatt.connected) device.gatt.disconnect();
+  stopSource();
+};
+
+function startSource(kind) {
+  source = kind;
+  proc = new EcgProcessor(FS);
+  trace.fill(NaN); beats.fill(0); pos = 0;
+  lastSeq = null; lost = 0; received = 0; startTime = performance.now(); rec = null;
+  $("bpm").textContent = "--"; $("rr").textContent = "-- ms";
+  setStatus(kind === "ble" ? "연결됨" : "데모 재생 중", true);
+  $("idleBtns").style.display = "none"; $("liveBtns").style.display = "block";
+  $("btnStop").textContent = kind === "ble" ? "연결 끊기" : "데모 정지";
+  $("btnRecord").disabled = false; $("btnRecord").textContent = REC_SEC + "초 측정 시작";
+  $("msg").className = "msg"; $("msg").textContent = "파형이 안정되면 측정을 시작하세요. 측정 중에는 움직이지 마세요.";
+  $("recDone").style.display = "none";
+}
+
+function stopSource(why) {
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  if (!source) return;
+  source = null; rec = null;
+  setStatus("연결 안 됨");
+  $("idleBtns").style.display = "block"; $("liveBtns").style.display = "none"; $("recProg").style.display = "none";
+  if (why) { $("msg").className = "msg warn"; $("msg").textContent = why; } else $("msg").textContent = "";
+}
+
+// 패킷: [seq uint16][sample uint16 x 9], 리틀엔디언
+function onPacket(ev) {
+  const dv = ev.target.value, seq = dv.getUint16(0, true);
+  if (lastSeq !== null) { const gap = (seq - lastSeq - 1) & 0xffff; if (gap > 0 && gap < 1000) lost += gap; }
+  lastSeq = seq;
+  for (let o = 2; o + 1 < dv.byteLength; o += 2) ingest(dv.getUint16(o, true));
+}
+
+function ingest(raw) {
+  const { y, beat } = proc.push(raw);
+  trace[pos] = y; beats[pos] = 0;
+  if (beat) {
+    const back = (proc.n - 1) - beat.index;
+    beats[(pos - back + N) % N] = 1;
+    onBeat(beat);
+  }
+  pos = (pos + 1) % N;
+  received++;
+
+  if (rec) {
+    rec.sig.push(y);
+    if (beat && beat.index >= rec.start) rec.r.push(beat.index - rec.start);
+    if (rec.sig.length >= REC_SEC * FS) finishRecording();
+  }
+}
+
+function onBeat(beat) {
+  const h = $("heart"); h.classList.add("pulse"); setTimeout(() => h.classList.remove("pulse"), 120);
+  if (beat.hr) { $("bpm").textContent = Math.round(beat.hr); $("rr").textContent = Math.round(beat.rrMs) + " ms"; }
+}
+
+$("btnRecord").onclick = () => {
+  rec = { sig: [], r: [], start: proc.n };
+  $("btnRecord").disabled = true; $("btnRecord").textContent = "측정 중… 움직이지 마세요";
+  $("recProg").style.display = "block"; $("recDone").style.display = "none";
+};
+
+function finishRecording() {
+  const r = rec; rec = null;
+  $("recProg").style.display = "none";
+  $("btnRecord").disabled = false; $("btnRecord").textContent = "다시 측정하기";
+  const avg = averageBeat(r.sig, r.r, FS);
+  if (!avg) {
+    $("msg").className = "msg warn";
+    $("msg").textContent = "박동을 충분히 찾지 못했어요. 전극을 확인하고 움직이지 않은 상태로 다시 측정해주세요.";
+    return;
+  }
+  const an = analyzeBeat(avg.beat, FS, avg.rAt, avg.rrMs);
+  current = {
+    id: Date.now(), date: new Date().toISOString(), source,
+    durationSec: REC_SEC, beatsUsed: avg.beatsUsed, rAt: avg.rAt, fs: FS,
+    beat: Array.from(avg.beat, (v) => Math.round(v * 10) / 10),
+    analysis: an,
+  };
+  const saved = Store.saveSession(current);
+  const v = an.values;
+  $("recSummary").textContent = `평균 심박수 ${v.hr} bpm · PR ${v.pr} ms · QRS ${v.qrs} ms · QTc ${v.qtc} ms (박동 ${avg.beatsUsed}개 평균)`;
+  $("recDone").style.display = "block";
+  $("msg").textContent = "";
+  toast(saved ? "측정 기록을 저장했어요" : "저장 공간이 부족해 기록을 저장하지 못했어요");
+}
+$("goCompare").onclick = () => showView("compare");
+
+function setStatus(text, on = false) { $("status").textContent = text; $("status").className = "pill" + (on ? " on" : ""); }
+
+// ---------- 실시간 그래프 ----------
+function fit(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return dpr;
+}
+
+function drawScope() {
+  if ($("view-measure").classList.contains("active")) {
+    const dpr = fit(canvas), W = canvas.width, H = canvas.height;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "#0f2a1c"; ctx.lineWidth = 1; ctx.beginPath();
+    for (let s = 0; s <= WINDOW_SEC + 1e-6; s += 0.2) { const x = Math.round(s / WINDOW_SEC * W) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let k = 1; k < 6; k++) { const yy = Math.round(k * H / 6) + 0.5; ctx.moveTo(0, yy); ctx.lineTo(W, yy); }
+    ctx.stroke();
+
+    let mn = Infinity, mx = -Infinity;
+    for (let i = 0; i < N; i++) { const v = trace[i]; if (v === v) { if (v < mn) mn = v; if (v > mx) mx = v; } }
+    if (mx > mn) {
+      const pad = (mx - mn) * 0.15, lo = mn - pad, hi = mx + pad, yOf = (v) => H - (v - lo) / (hi - lo) * H;
+      const gap = Math.round(0.08 * FS);
+      ctx.strokeStyle = "#3ef08a"; ctx.lineWidth = 2 * dpr; ctx.lineJoin = "round"; ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < N; i++) {
+        const v = trace[i];
+        if ((i - pos + N) % N < gap || v !== v) { pen = false; continue; }
+        const x = i / (N - 1) * W, yy = yOf(v);
+        if (pen) ctx.lineTo(x, yy); else { ctx.moveTo(x, yy); pen = true; }
+      }
+      ctx.stroke();
+      ctx.fillStyle = "#ff5a6e";
+      for (let i = 0; i < N; i++) {
+        if (!beats[i] || (i - pos + N) % N < gap) continue;
+        const x = i / (N - 1) * W, yy = yOf(trace[i]) - 10 * dpr;
+        ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x - 5 * dpr, yy - 8 * dpr); ctx.lineTo(x + 5 * dpr, yy - 8 * dpr); ctx.fill();
+      }
+    }
+  }
+  if (source) {
+    const sec = Math.floor((performance.now() - startTime) / 1000);
+    $("elapsed").textContent = Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+  }
+  $("samples").textContent = received.toLocaleString();
+  $("loss").textContent = lost;
+  if (rec) $("recProg").firstElementChild.style.width = (100 * rec.sig.length / (REC_SEC * FS)) + "%";
+  requestAnimationFrame(drawScope);
+}
+requestAnimationFrame(drawScope);
+
+// ================= 평균 박동 그래프 (비교·퀴즈 공용) =================
+// opts: { mine, std, labels: "mine"|"std"|null, highlight: [fromMs, toMs], hlLabel, tap: ms, answer: [fromMs,toMs] }
+const X0 = -BEAT_PRE * 1000, X1 = BEAT_POST * 1000;
+const msOf = (b, idx) => (idx - b.rAt) * 1000 / b.fs;
+function norm(b) { const a = b.analysis; return Array.from(b.beat, (v) => (v - a.base) / a.amp); }
+
+function drawBeat(cv, o) {
+  const dpr = fit(cv), W = cv.width, H = cv.height, c = cv.getContext("2d");
+  c.fillStyle = "#000"; c.fillRect(0, 0, W, H);
+  const xOf = (ms) => (ms - X0) / (X1 - X0) * W;
+  // 심전도 용지 격자: 작은 칸 40ms, 큰 칸 200ms
+  for (let ms = X0; ms <= X1 + 1e-6; ms += 40) {
+    c.strokeStyle = Math.round(ms) % 200 === 0 ? "#173a28" : "#0d1f16"; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(Math.round(xOf(ms)) + 0.5, 0); c.lineTo(Math.round(xOf(ms)) + 0.5, H); c.stroke();
+  }
+  const series = [];
+  if (o.std) series.push({ b: o.std, y: norm(o.std), color: "#c9d4ce", dash: [6 * dpr, 5 * dpr], w: 1.6 });
+  if (o.mine) series.push({ b: o.mine, y: norm(o.mine), color: "#3ef08a", dash: [], w: 2.4 });
+  let mn = Infinity, mx = -Infinity;
+  for (const s of series) for (const v of s.y) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  const pad = (mx - mn) * 0.12, lo = mn - pad, hi = mx + pad * 1.6;
+  const yOf = (v) => H - (v - lo) / (hi - lo) * H;
+  for (let k = 0; k <= 10; k++) { const yy = Math.round(k * H / 10) + 0.5; c.strokeStyle = k % 5 ? "#0d1f16" : "#173a28"; c.beginPath(); c.moveTo(0, yy); c.lineTo(W, yy); c.stroke(); }
+
+  if (o.highlight) {
+    c.fillStyle = "rgba(62,240,138,.13)";
+    c.fillRect(xOf(o.highlight[0]), 0, xOf(o.highlight[1]) - xOf(o.highlight[0]), H);
+    if (o.hlLabel) { c.fillStyle = "#3ef08a"; c.font = `${12 * dpr}px -apple-system, sans-serif`; c.textAlign = "center";
+      c.fillText(o.hlLabel, (xOf(o.highlight[0]) + xOf(o.highlight[1])) / 2, H - 8 * dpr); }
+  }
+  if (o.answer) {
+    c.strokeStyle = "#3ef08a"; c.lineWidth = 2 * dpr; c.setLineDash([4 * dpr, 4 * dpr]);
+    c.strokeRect(xOf(o.answer[0]), 2 * dpr, xOf(o.answer[1]) - xOf(o.answer[0]), H - 4 * dpr); c.setLineDash([]);
+  }
+  for (const s of series) {
+    c.strokeStyle = s.color; c.lineWidth = s.w * dpr; c.setLineDash(s.dash); c.lineJoin = "round"; c.beginPath();
+    s.y.forEach((v, i) => { const x = xOf(msOf(s.b, i)), yy = yOf(v); i ? c.lineTo(x, yy) : c.moveTo(x, yy); });
+    c.stroke(); c.setLineDash([]);
+  }
+  if (o.labels) {
+    const s = series.find((q) => q.b === (o.labels === "mine" ? o.mine : o.std));
+    if (s) {
+      const p = s.b.analysis.points;
+      c.font = `600 ${13 * dpr}px -apple-system, sans-serif`; c.textAlign = "center";
+      for (const k of ["P", "Q", "R", "S", "T"]) {
+        if ((k === "P" && !s.b.analysis.pValid) || (k === "T" && !s.b.analysis.tValid)) continue;
+        const x = xOf(msOf(s.b, p[k])), yy = yOf(s.y[p[k]]);
+        const below = k === "Q" || k === "S" || s.y[p[k]] < 0;
+        c.fillStyle = s.color; c.beginPath(); c.arc(x, yy, 3.5 * dpr, 0, 7); c.fill();
+        c.fillText(k, x, below ? yy + 18 * dpr : yy - 9 * dpr);
+      }
+    }
+  }
+  if (o.tap != null) {
+    c.strokeStyle = o.tapOk ? "#3ef08a" : "#ff5a6e"; c.lineWidth = 2.5 * dpr;
+    c.beginPath(); c.moveTo(xOf(o.tap), 0); c.lineTo(xOf(o.tap), H); c.stroke();
+  }
+}
+
+// 파형 구간 (ms, R=0 기준)
+function regions(b) {
+  const p = b.analysis.points, m = (i) => msOf(b, i);
+  return {
+    P: [m(p.pOn), m(p.P) + (m(p.P) - m(p.pOn))],
+    QRS: [m(p.qrsOn), m(p.qrsOff)],
+    T: [m(p.T) - (m(p.tEnd) - m(p.T)), m(p.tEnd)],
+    PR: [m(p.pOn), m(p.qrsOn)],
+    QT: [m(p.qrsOn), m(p.tEnd)],
+  };
+}
+
+// ================= 비교 화면 =================
+const WAVE_INFO = {
+  P:   ["P파", "심방 탈분극", "동방결절에서 시작된 전기 신호가 좌우 심방으로 퍼지며 심방이 수축할 준비를 하는 과정이에요. 작고 둥근 모양이 정상이에요."],
+  QRS: ["QRS군", "심실 탈분극", "신호가 심실 근육 전체로 빠르게 퍼지는 과정이에요. 심실 근육이 두껍기 때문에 가장 크고 뾰족하게 나타나요. 정상 폭은 0.12초 미만이에요."],
+  T:   ["T파", "심실 재분극", "수축한 심실이 다음 박동을 위해 전기적으로 회복하는 과정이에요. 보통 QRS와 같은 방향(위쪽)으로 완만하게 나타나요."],
+  PR:  ["PR 간격", "심방 → 심실 전도 시간", "P파 시작부터 QRS 시작까지예요. 방실결절에서 신호가 잠깐 지연되는 시간이 포함돼요. 정상은 0.12~0.20초예요."],
+  QT:  ["QT 간격", "심실 탈분극 + 재분극 시간", "QRS 시작부터 T파 끝까지예요. 심박수가 빠를수록 짧아지기 때문에 심박수로 보정한 QTc(Bazett 공식)로 비교해요."],
+};
+let cmpLabels = "mine", cmpWave = "QRS";
+
+document.querySelectorAll("#lblSeg button").forEach((b) => (b.onclick = () => {
+  cmpLabels = b.dataset.l;
+  document.querySelectorAll("#lblSeg button").forEach((x) => x.classList.toggle("on", x === b));
+  drawCompare();
+}));
+$("waveChips").innerHTML = Object.keys(WAVE_INFO).map((k) => `<button data-w="${k}">${WAVE_INFO[k][0]}</button>`).join("");
+document.querySelectorAll("#waveChips button").forEach((b) => (b.onclick = () => { cmpWave = b.dataset.w; drawCompare(); }));
+window.addEventListener("resize", () => { if ($("view-compare").classList.contains("active")) drawCompare(); });
+
+function renderCompare() {
+  if (!current) { const s = Store.listSessions(); if (s.length) current = s[0]; }
+  $("cmpEmpty").style.display = current ? "none" : "block";
+  $("cmpBody").style.display = current ? "block" : "none";
+  if (!current) return;
+  const d = new Date(current.date);
+  $("cmpMeta").textContent = `${d.toLocaleString("ko-KR")} · ${current.source === "demo" ? "데모 데이터" : "기기 측정"} · 박동 ${current.beatsUsed}개 평균`;
+  const v = current.analysis.values, sv = STD.analysis.values;
+  const rows = [["hr", "심박수"], ["rr", "RR 간격"], ["pr", "PR 간격"], ["qrs", "QRS 폭"], ["qtc", "QTc"]];
+  $("cmpTable").innerHTML = `<tr><th>항목</th><th>내 값</th><th>표준 파형</th><th>정상 범위</th><th></th></tr>` +
+    rows.map(([k, name]) => {
+      const r = NORMAL_RANGES[k], ok = v[k] >= r.min && v[k] <= r.max;
+      return `<tr><td>${name}</td><td><b>${v[k]}</b></td><td>${sv[k]}</td><td class="small">${r.min}–${r.max} ${r.unit}</td>
+        <td><span class="tag ${ok ? "ok" : "out"}">${ok ? "범위 안" : "범위 밖"}</span></td></tr>`;
+    }).join("");
+  drawCompare();
+}
+
+function drawCompare() {
+  if (!current) return;
+  document.querySelectorAll("#waveChips button").forEach((b) => b.classList.toggle("on", b.dataset.w === cmpWave));
+  const info = WAVE_INFO[cmpWave];
+  $("waveTitle").textContent = `${info[0]} · ${info[1]}`; $("waveText").textContent = info[2];
+  const ref = cmpLabels === "mine" ? current : STD;
+  drawBeat($("cmpCv"), { mine: current, std: STD, labels: cmpLabels, highlight: regions(ref)[cmpWave], hlLabel: info[0] });
+}
+
+// ================= 퀴즈 =================
+const BANK = [
+  { q: "P파는 심장의 어떤 전기적 활동을 나타낼까요?", a: "심방 탈분극", w: ["심실 탈분극", "심실 재분극", "심방 재분극"], e: "P파는 동방결절에서 시작된 신호가 심방으로 퍼지는 심방 탈분극이에요." },
+  { q: "QRS군은 무엇을 나타낼까요?", a: "심실 탈분극", w: ["심방 탈분극", "심실 재분극", "방실결절 지연"], e: "QRS군은 신호가 심실 근육 전체로 퍼지는 심실 탈분극이에요. 근육량이 많아 가장 크게 보여요." },
+  { q: "T파는 무엇을 나타낼까요?", a: "심실 재분극", w: ["심실 탈분극", "심방 탈분극", "심방 재분극"], e: "T파는 심실이 전기적으로 회복하는 심실 재분극이에요." },
+  { q: "심방 재분극이 심전도에서 잘 보이지 않는 이유는?", a: "QRS군에 가려지기 때문", w: ["심방 재분극이 일어나지 않기 때문", "T파와 합쳐지기 때문", "P파 안에 포함되기 때문"], e: "심방 재분극은 심실 탈분극과 거의 같은 시기에 일어나 훨씬 큰 QRS군에 묻혀요." },
+  { q: "정상 PR 간격은?", a: "0.12 ~ 0.20초", w: ["0.04 ~ 0.10초", "0.20 ~ 0.30초", "0.35 ~ 0.45초"], e: "정상 PR 간격은 0.12~0.20초(작은 칸 3~5칸)예요. 길어지면 방실 전도 지연을 의심해요." },
+  { q: "정상 QRS 폭은 보통 몇 초 미만일까요?", a: "0.12초", w: ["0.04초", "0.20초", "0.40초"], e: "정상 QRS 폭은 0.12초(작은 칸 3칸) 미만, 보통 0.06~0.10초예요." },
+  { q: "기록 속도 25mm/s에서 심전도 용지의 작은 칸(1mm)은 몇 초일까요?", a: "0.04초", w: ["0.02초", "0.10초", "0.20초"], e: "1초에 25mm를 기록하므로 1mm는 1/25 = 0.04초예요." },
+  { q: "기록 속도 25mm/s에서 큰 칸(5mm)은 몇 초일까요?", a: "0.20초", w: ["0.04초", "0.10초", "1.00초"], e: "큰 칸은 작은 칸 5개이므로 0.04 × 5 = 0.20초예요." },
+  { q: "성인의 정상 동리듬 심박수 범위는?", a: "60 ~ 100회/분", w: ["40 ~ 60회/분", "100 ~ 150회/분", "50 ~ 120회/분"], e: "60회 미만은 서맥, 100회 초과는 빈맥이라고 해요." },
+  { q: "RR 간격이 0.75초라면 심박수는?", a: "80회/분", w: ["75회/분", "60회/분", "100회/분"], e: "심박수 = 60 ÷ RR(초) = 60 ÷ 0.75 = 80회/분이에요." },
+  { q: "R파와 다음 R파 사이에 큰 칸이 4개라면 심박수는? (300 법칙)", a: "75회/분", w: ["60회/분", "100회/분", "150회/분"], e: "300 ÷ 큰 칸 수 = 300 ÷ 4 = 75회/분이에요." },
+  { q: "정상 심장 박동을 시작하는 자연 박동 조율기는?", a: "동방결절 (SA node)", w: ["방실결절 (AV node)", "히스속", "푸르키네 섬유"], e: "동방결절이 가장 빠르게 자발적으로 흥분해 심장 리듬을 결정해요." },
+  { q: "PR 간격에 포함되는 생리적 지연은 주로 어디서 일어날까요?", a: "방실결절", w: ["동방결절", "푸르키네 섬유", "심실 근육"], e: "방실결절에서 신호가 잠깐 지연되어 심방이 다 수축한 뒤 심실이 수축할 수 있어요." },
+  { q: "병원에서 쓰는 표준 심전도는 몇 개의 유도로 기록할까요?", a: "12개", w: ["1개", "3개", "6개"], e: "표준 심전도는 사지 유도 6개와 흉부 유도 6개, 총 12유도예요. 이 실습 기기는 1개 유도만 측정해요." },
+];
+
+const shuffle = (a) => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+function buildQuiz() {
+  const qs = [];
+  const tapStd = shuffle([["P", "P파"], ["QRS", "QRS군"], ["T", "T파"]]).slice(0, 2);
+  for (const [k, name] of tapStd)
+    qs.push({ kind: "tap", beat: "std", region: k, q: `표준 파형에서 ${name}를 터치하세요.`, e: `${name}: ${WAVE_INFO[k][1]}. ${WAVE_INFO[k][2]}` });
+
+  if (current) {
+    const v = current.analysis.values;
+    const hr = Math.round(60000 / v.rr);
+    const opts = new Set([hr]); for (const d of shuffle([-20, -12, 12, 20, 30])) { if (opts.size < 4 && hr + d > 30) opts.add(hr + d); }
+    qs.push({ kind: "mc", mine: true, q: `방금 측정한 내 평균 RR 간격은 ${v.rr} ms예요. 내 심박수는 약 몇 회/분일까요?`,
+      a: hr + "회/분", w: [...opts].filter((x) => x !== hr).map((x) => x + "회/분"), e: `심박수 = 60000 ÷ RR(ms) = 60000 ÷ ${v.rr} ≈ ${hr}회/분이에요.` });
+    qs.push({ kind: "tap", beat: "mine", region: "QRS", q: "내 평균 박동에서 QRS군을 터치하세요.", e: "가장 크고 뾰족한 부분이 QRS군(심실 탈분극)이에요." });
+    const r = NORMAL_RANGES.pr, st = v.pr < r.min ? "정상 범위보다 짧다" : v.pr > r.max ? "정상 범위보다 길다" : "정상 범위 안이다";
+    qs.push({ kind: "mc", mine: true, q: `내 PR 간격은 약 ${v.pr} ms로 측정됐어요. 정상 범위(120~200 ms)와 비교하면?`,
+      a: st, w: ["정상 범위보다 짧다", "정상 범위 안이다", "정상 범위보다 길다"].filter((x) => x !== st),
+      e: `${v.pr} ms는 ${{ "정상 범위보다 짧다": "정상 범위보다 짧아요", "정상 범위보다 길다": "정상 범위보다 길어요", "정상 범위 안이다": "정상 범위 안이에요" }[st]}. 단일 유도 측정의 근사값이라 학습용으로만 봐주세요.` });
+  }
+  for (const b of shuffle(BANK)) { if (qs.length >= 10) break; qs.push({ kind: "mc", ...b }); }
+  return shuffle(qs).map((x) => (x.kind === "mc" ? { ...x, opts: shuffle([x.a, ...x.w]) } : x));
+}
+
+let quiz = null;
+function renderQuizStart() {
+  if (quiz && !quiz.done) return;
+  $("quizStart").style.display = "block"; $("quizQ").style.display = "none"; $("quizEnd").style.display = "none";
+  if (!current) { const s = Store.listSessions(); if (s.length) current = s[0]; }
+  $("quizInfo").innerHTML = "개념 문제와 파형 터치 문제가 섞여 나와요." +
+    (current ? "<br><b>내 측정 결과를 활용한 문제</b>도 3개 포함돼요." : "<br>측정을 먼저 하면 <b>내 파형으로 푸는 문제</b>가 추가돼요.");
+}
+$("btnQuiz").onclick = $("btnRetry").onclick = () => {
+  quiz = { qs: buildQuiz(), i: 0, score: 0, wrong: [], done: false };
+  $("quizStart").style.display = "none"; $("quizEnd").style.display = "none"; $("quizQ").style.display = "block";
+  showQ();
+};
+
+function showQ() {
+  const q = quiz.qs[quiz.i];
+  q.answered = false;
+  $("qNum").textContent = `${quiz.i + 1} / ${quiz.qs.length}`;
+  $("qKind").textContent = q.kind === "tap" ? "파형 터치" : q.mine ? "내 파형 문제" : "개념";
+  $("qPrompt").textContent = q.q;
+  $("qFb").style.display = "none"; $("btnNext").style.display = "none";
+  $("qOpts").innerHTML = "";
+  $("qCvWrap").style.display = q.kind === "tap" ? "block" : "none";
+  if (q.kind === "tap") {
+    const b = q.beat === "std" ? STD : current;
+    const draw = (extra = {}) => drawBeat($("qCv"), { [q.beat === "std" ? "std" : "mine"]: b, ...extra });
+    draw();
+    $("qCv").onclick = (ev) => {
+      if (q.answered) return;
+      const rect = $("qCv").getBoundingClientRect();
+      const ms = X0 + (ev.clientX - rect.left) / rect.width * (X1 - X0);
+      const [a, z] = regions(b)[q.region];
+      const ok = ms >= a - 20 && ms <= z + 20;                 // 20ms 여유
+      draw({ tap: ms, tapOk: ok, answer: [a, z], labels: q.beat === "std" ? "std" : "mine" });
+      answer(ok);
+    };
+  } else {
+    $("qOpts").innerHTML = q.opts.map((o, i) => `<button data-i="${i}">${esc(o)}</button>`).join("");
+    document.querySelectorAll("#qOpts button").forEach((btn) => (btn.onclick = () => {
+      if (q.answered) return;
+      const ok = q.opts[+btn.dataset.i] === q.a;
+      document.querySelectorAll("#qOpts button").forEach((x) => { if (q.opts[+x.dataset.i] === q.a) x.classList.add("correct"); });
+      if (!ok) btn.classList.add("wrong");
+      answer(ok);
+    }));
+  }
+}
+
+function answer(ok) {
+  const q = quiz.qs[quiz.i];
+  q.answered = true;
+  if (ok) quiz.score++; else quiz.wrong.push(q);
+  $("qFb").innerHTML = `<b class="${ok ? "ok" : "no"}">${ok ? "정답이에요!" : "아쉬워요."}</b> ${esc(q.e)}` +
+    (!ok && q.kind === "mc" ? `<br><span class="small">정답: ${esc(q.a)}</span>` : "") +
+    (!ok && q.kind === "tap" ? `<br><span class="small">점선 상자가 정답 구간이에요.</span>` : "");
+  $("qFb").style.display = "block";
+  $("btnNext").style.display = "block";
+  $("btnNext").textContent = quiz.i + 1 < quiz.qs.length ? "다음" : "결과 보기";
+}
+
+$("btnNext").onclick = () => {
+  quiz.i++;
+  if (quiz.i < quiz.qs.length) { showQ(); window.scrollTo(0, 0); return; }
+  quiz.done = true;
+  const total = quiz.qs.length;
+  Store.saveQuiz({ date: new Date().toISOString(), score: quiz.score, total, wrong: quiz.wrong.map((q) => q.q) });
+  $("quizQ").style.display = "none"; $("quizEnd").style.display = "block";
+  $("qScore").textContent = `${quiz.score} / ${total}`;
+  $("qScoreSub").textContent = quiz.score === total ? "모두 맞혔어요!" : `${total - quiz.score}문제를 다시 확인해 보세요.`;
+  $("qWrong").innerHTML = quiz.wrong.length ? `<h2>틀린 문제</h2>` + quiz.wrong.map((q) =>
+    `<div class="card"><div class="title">${esc(q.q)}</div><div class="small">${q.kind === "mc" ? "정답: " + esc(q.a) + "<br>" : ""}${esc(q.e)}</div></div>`).join("") : "";
+  window.scrollTo(0, 0);
+};
+
+// ================= 기록 =================
+function renderHistory() {
+  const s = Store.listSessions(), q = Store.listQuiz();
+  const fmt = (iso) => new Date(iso).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  $("histSessions").innerHTML = s.length ? s.map((x, i) => {
+    const v = x.analysis.values;
+    return `<div class="item"><div><div class="l">${fmt(x.date)} · ${v.hr} bpm</div>
+      <div class="s">${x.source === "demo" ? "데모" : "기기"} · PR ${v.pr} · QRS ${v.qrs} · QTc ${v.qtc} ms</div></div>
+      <button class="secondary" data-i="${i}">비교 보기</button></div>`;
+  }).join("") : `<div class="small">아직 측정 기록이 없어요.</div>`;
+  document.querySelectorAll("#histSessions button").forEach((b) => (b.onclick = () => { current = s[+b.dataset.i]; showView("compare"); }));
+  $("histQuiz").innerHTML = q.length ? q.map((x) =>
+    `<div class="item"><div><div class="l">${fmt(x.date)}</div><div class="s">틀린 문제 ${x.total - x.score}개</div></div><b>${x.score} / ${x.total}</b></div>`).join("")
+    : `<div class="small">아직 퀴즈 기록이 없어요.</div>`;
+}
+$("btnClear").onclick = () => { if (confirm("측정 기록과 퀴즈 기록을 모두 지울까요?")) { Store.clear(); current = null; renderHistory(); toast("기록을 지웠어요"); } };
+</script>
+</body>
+</html>
